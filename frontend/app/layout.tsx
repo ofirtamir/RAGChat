@@ -9,8 +9,22 @@ const rubik = Rubik({
 })
 
 export const metadata: Metadata = {
-  title: "RAGChat",
-  description: "AI-Powered Document Search",
+  metadataBase: new URL("https://rag-chat-smoky-alpha.vercel.app"),
+  title: "שמאות AI",
+  description: "מערכת חיפוש חכמה במסמכי שמאות, מבוססת בינה מלאכותית",
+  openGraph: {
+    title: "שמאות AI",
+    description: "מערכת חיפוש חכמה במסמכי שמאות, מבוססת בינה מלאכותית",
+    url: "https://rag-chat-smoky-alpha.vercel.app",
+    siteName: "שמאות AI",
+    locale: "he_IL",
+    type: "website",
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "שמאות AI",
+    description: "מערכת חיפוש חכמה במסמכי שמאות, מבוססת בינה מלאכותית",
+  },
 }
 
 export default function RootLayout({
