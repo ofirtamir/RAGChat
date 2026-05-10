@@ -64,12 +64,12 @@ export function DocumentsDialog({
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 text-right">
             <Database className="w-5 h-5 text-sky-500" />
-            מאגר ידע
+            מסמכי שמאות
           </DialogTitle>
           <DialogDescription className="text-right">
             {documents.length === 0
-              ? "אין מסמכים במאגר. העלה קבצים כדי להתחיל."
-              : `${documents.length} מסמכים · ${totalChunks} קטעים מאונדקסים`}
+              ? "לא הועלו קבצים עדיין. העלה חוות דעת, דוחות הערכה או כל מסמך שמאות."
+              : `${documents.length} קבצים · ${totalChunks} קטעים מאונדקסים`}
           </DialogDescription>
         </DialogHeader>
 
@@ -126,7 +126,7 @@ export function DocumentsDialog({
               }}
             >
               <Upload className="w-4 h-4" />
-              {isUploading ? "...מעלה" : "העלה מסמכים"}
+              {isUploading ? "...מעלה" : "העלה חוות דעת / שומות"}
             </Button>
           </label>
 

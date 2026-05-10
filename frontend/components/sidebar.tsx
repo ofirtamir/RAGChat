@@ -36,9 +36,9 @@ export function Sidebar({
         <div className="p-4 border-b flex items-center justify-between">
           <div>
             <h1 className="font-bold text-lg bg-gradient-to-l from-sky-500 to-cyan-400 bg-clip-text text-transparent">
-              RAGChat AI
+              שמאות AI
             </h1>
-            <p className="text-xs text-muted-foreground">חיפוש חכם במסמכים</p>
+            <p className="text-xs text-muted-foreground">עוזר שמאות חכם</p>
           </div>
           <ThemeToggle />
         </div>
@@ -84,7 +84,7 @@ export function Sidebar({
         {/* Knowledge base summary */}
         <div className="p-3 space-y-2">
           <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground px-1">
-            מאגר ידע
+            מסמכי שמאות
           </p>
 
           {/* Stats row */}
@@ -94,12 +94,12 @@ export function Sidebar({
               {documents.length > 0 ? (
                 <>
                   <span className="font-semibold text-foreground">{documents.length}</span>
-                  {" מסמכים · "}
+                  {" קבצים · "}
                   <span className="font-semibold text-foreground">{totalChunks}</span>
                   {" קטעים"}
                 </>
               ) : (
-                "אין מסמכים במאגר"
+                "לא הועלו קבצים עדיין"
               )}
             </span>
           </div>

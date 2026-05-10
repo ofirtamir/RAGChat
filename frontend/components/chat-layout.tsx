@@ -215,13 +215,19 @@ export function ChatLayout() {
                   />
                 ))}
               </div>
-              <h2 className="text-2xl font-bold text-foreground">שלום</h2>
-              <p className="text-muted-foreground max-w-sm text-sm">
-                אנחנו כאן כדי לעזור לך למצוא מידע במסמכים שלך.
-                <br />העלה מסמכים מהסיידבר ושאל שאלות.
+              <h2 className="text-2xl font-bold text-foreground">שלום, שמאי 👋</h2>
+              <p className="text-muted-foreground max-w-sm text-sm leading-relaxed">
+                מערכת חיפוש חכמה במסמכי שמאות, חוות דעת ודוחות הערכה.
+                <br />העלה קבצים מהסיידבר ושאל כל שאלה על הנכסים.
               </p>
               <div className="flex gap-2 flex-wrap justify-center mt-2">
-                {["סכם את המסמך", "השווה בין X ל-Y", "מה כתוב על..."].map(q => (
+                {[
+                  "מה שווי הנכס לפי חוות הדעת?",
+                  "אילו פגמים נמצאו בנכס?",
+                  "מהי שיטת ההשוואה ששימשה?",
+                  "מה עלות הבנייה למ\"ר?",
+                  "השווה בין שתי שומות",
+                ].map(q => (
                   <button
                     key={q}
                     onClick={() => { setInput(q); inputRef.current?.focus() }}
@@ -266,7 +272,7 @@ export function ChatLayout() {
                 value={input}
                 onChange={e => setInput(e.target.value)}
                 onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend() } }}
-                placeholder="מצא מידע במאגר..."
+                placeholder="שאל שאלה על מסמכי השמאות..."
                 className="flex-1 h-11 rounded-xl border-border focus-visible:ring-sky-400 bg-card"
                 disabled={isLoading}
               />
