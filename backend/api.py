@@ -1,0 +1,252 @@
+"""
+FastAPI backend for RAGChat.
+Exposes the LangGraph pipeline via REST endpoints with SSE streaming.
+"""
+
+import os
+import sys
+import uuid
+import json
+import shutil
+import asyncio
+from pathlib import Path
+from typing import AsyncGenerator
+from concurrent.futures import ThreadPoolExecutor
+from queue import Queue, Empty
+
+from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
+
+# Add parent to path so we can import src/
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from src.graph import run_rag_pipeline, stream_rag_pipeline
+from src.document_loader import load_document, SUPPORTED_EXTENSIONS
+from src.chunker import chunk_documents
+from src.vector_store import (
+    add_documents,
+    get_document_count,
+    clear_vector_store,
+    list_document_sources,
+    get_all_chunks_for_source,
+)
+from src.observability import initialize_langfuse
+from config import UPLOADS_DIR
+
+app = FastAPI(title="RAGChat API", version="1.0.0")
+
+# ALLOWED_ORIGINS: comma-separated list of permitted frontend origins.
+# Set via env var in production, e.g.:
+#   ALLOWED_ORIGINS=https://your-app.vercel.app
+_raw_origins = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000")
+ALLOWED_ORIGINS = [o.strip() for o in _raw_origins.split(",") if o.strip()]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=ALLOWED_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+    expose_headers=["*"],
+)
+
+initialize_langfuse()
+
+_executor = ThreadPoolExecutor(max_workers=4)
+
+
+class ChatRequest(BaseModel):
+    query: str
+    chat_history: list[dict] = []
+    session_id: str | None = None
+
+
+class ChatResponse(BaseModel):
+    answer: str
+    sources: list[str]
+    route: dict | None
+    rewritten: dict | None
+    full_doc_decision: dict | None
+    plan: dict | None
+
+
+@app.post("/api/chat", response_model=ChatResponse)
+async def chat(request: ChatRequest):
+    """Run the RAG pipeline and return the result."""
+    session_id = request.session_id or str(uuid.uuid4())
+    try:
+        result = run_rag_pipeline(
+            query=request.query,
+            chat_history=request.chat_history,
+            session_id=session_id,
+        )
+        return ChatResponse(
+            answer=result["answer"],
+            sources=result.get("sources", []),
+            route=result.get("route").model_dump() if result.get("route") else None,
+            rewritten=result.get("rewritten").model_dump() if result.get("rewritten") else None,
+            full_doc_decision=result.get("full_doc_decision").model_dump() if result.get("full_doc_decision") else None,
+            plan=result.get("plan").model_dump() if result.get("plan") else None,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+def _serialize_pydantic(obj):
+    """Safely serialize a pydantic model or return as-is."""
+    if obj is None:
+        return None
+    if hasattr(obj, "model_dump"):
+        return obj.model_dump()
+    return obj
+
+
+def _run_stream_in_thread(query: str, chat_history: list, session_id: str, q: Queue):
+    """Run the sync stream_rag_pipeline in a thread and push events to a queue."""
+    # DEBUG: Log what the backend receives from the frontend
+    print(f"\n{'#'*60}")
+    print(f"[DEBUG API] query='{query[:80]}'")
+    print(f"[DEBUG API] chat_history length: {len(chat_history)}")
+    for i, msg in enumerate(chat_history):
+        role = msg.get('role', '?')
+        content = msg.get('content', '')
+        print(f"[DEBUG API] chat_history[{i}]: role={role}, content_len={len(content)}, preview='{content[:80]}'")
+    print(f"{'#'*60}\n")
+    try:
+        for event in stream_rag_pipeline(
+            query=query,
+            chat_history=chat_history,
+            session_id=session_id,
+        ):
+            q.put(event)
+        q.put(None)  # sentinel: done
+    except Exception as e:
+        q.put({"type": "error", "error": str(e)})
+        q.put(None)
+
+
+@app.post("/api/chat/stream")
+async def chat_stream(request: ChatRequest):
+    """Stream the RAG pipeline stages as SSE events, flushed in real-time."""
+    session_id = request.session_id or str(uuid.uuid4())
+
+    async def event_generator() -> AsyncGenerator[str, None]:
+        q: Queue = Queue()
+        loop = asyncio.get_event_loop()
+
+        # Run the blocking pipeline in a separate thread
+        loop.run_in_executor(
+            _executor,
+            _run_stream_in_thread,
+            request.query,
+            request.chat_history,
+            session_id,
+            q,
+        )
+
+        while True:
+            # Poll the queue from the async context
+            event = await loop.run_in_executor(None, lambda: q.get(timeout=120))
+
+            if event is None:
+                # Stream finished
+                yield f"event: done\ndata: {{}}\n\n"
+                break
+
+            if event.get("type") == "error":
+                error_payload = json.dumps({"error": event["error"]}, ensure_ascii=False)
+                yield f"event: error\ndata: {error_payload}\n\n"
+                break
+
+            if event["type"] == "step":
+                payload = json.dumps({
+                    "node": event["node"],
+                    "label": event["label"],
+                    "icon": event["icon"],
+                    "detail": event.get("detail", ""),
+                }, ensure_ascii=False)
+                yield f"event: step\ndata: {payload}\n\n"
+
+            elif event["type"] == "token":
+                token_payload = json.dumps({
+                    "content": event["content"],
+                }, ensure_ascii=False)
+                yield f"event: token\ndata: {token_payload}\n\n"
+
+            elif event["type"] == "result":
+                data = event["data"]
+                result_payload = json.dumps({
+                    "answer": data["answer"],
+                    "sources": data.get("sources", []),
+                    "route": _serialize_pydantic(data.get("route")),
+                    "rewritten": _serialize_pydantic(data.get("rewritten")),
+                    "full_doc_decision": _serialize_pydantic(data.get("full_doc_decision")),
+                    "plan": _serialize_pydantic(data.get("plan")),
+                }, ensure_ascii=False)
+                yield f"event: result\ndata: {result_payload}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+            "Content-Type": "text/event-stream; charset=utf-8",
+        },
+    )
+
+
+@app.post("/api/upload")
+async def upload_documents(files: list[UploadFile] = File(...)):
+    """Upload and process documents into the vector store."""
+    results = []
+    for file in files:
+        ext = Path(file.filename).suffix.lower()
+        if ext not in SUPPORTED_EXTENSIONS:
+            results.append({"filename": file.filename, "status": "error", "message": f"Unsupported extension: {ext}"})
+            continue
+        try:
+            save_path = UPLOADS_DIR / file.filename
+            with open(save_path, "wb") as f:
+                shutil.copyfileobj(file.file, f)
+            docs = load_document(save_path)
+            chunks = chunk_documents(docs)
+            add_documents(chunks)
+            results.append({"filename": file.filename, "status": "ok", "chunks": len(chunks)})
+        except Exception as e:
+            results.append({"filename": file.filename, "status": "error", "message": str(e)})
+    return {"results": results}
+
+
+@app.get("/api/documents")
+async def get_documents():
+    """Return stats and list of indexed documents."""
+    try:
+        sources = list_document_sources()
+        total = get_document_count()
+        doc_stats = []
+        for src in sources:
+            chunks = get_all_chunks_for_source(src)
+            doc_stats.append({
+                "source": src,
+                "chunks": len(chunks),
+                "chars": sum(len(c.page_content) for c in chunks),
+            })
+        return {"total_chunks": total, "documents": doc_stats}
+    except Exception:
+        return {"total_chunks": 0, "documents": []}
+
+
+@app.delete("/api/documents")
+async def delete_documents():
+    """Clear all documents from the vector store."""
+    clear_vector_store()
+    return {"status": "cleared"}
+
+
+@app.get("/api/health")
+async def health():
+    return {"status": "ok"}
