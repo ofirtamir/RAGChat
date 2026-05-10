@@ -215,8 +215,8 @@ export function ChatLayout() {
                   />
                 ))}
               </div>
-              <h2 className="text-2xl font-bold text-foreground">שלום, שמאי 👋</h2>
-              <p className="text-muted-foreground max-w-sm text-sm leading-relaxed">
+              <h2 dir="rtl" className="text-2xl font-bold text-foreground">👋 שלום, שמאי</h2>
+              <p dir="rtl" className="text-muted-foreground max-w-sm text-sm leading-relaxed">
                 מערכת חיפוש חכמה במסמכי שמאות, חוות דעת ודוחות הערכה.
                 <br />העלה קבצים מהסיידבר ושאל כל שאלה על הנכסים.
               </p>
@@ -230,6 +230,7 @@ export function ChatLayout() {
                 ].map(q => (
                   <button
                     key={q}
+                    dir="rtl"
                     onClick={() => { setInput(q); inputRef.current?.focus() }}
                     className="text-xs px-3 py-1.5 rounded-full border border-border bg-card hover:bg-accent transition-colors text-muted-foreground"
                   >
