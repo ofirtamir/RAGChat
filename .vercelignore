@@ -1,0 +1,7 @@
+app.py
+backend/
+src/
+requirements.txt
+data/
+uploads/
+*.py
