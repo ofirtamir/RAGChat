@@ -7,11 +7,59 @@ import rehypeRaw from "rehype-raw"
 import { Message } from "@/types/chat"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 import { cn } from "@/lib/utils"
 import { FileText, Search, MessageCircle, ChevronDown, ChevronUp, Sparkles } from "lucide-react"
 
 interface MessageBubbleProps {
   message: Message
+}
+
+// Replace [1], [2], … with <cite title="filename.pdf">1</cite>
+// so ReactMarkdown's custom "cite" component can render a badge.
+// We deliberately skip replacement inside fenced code blocks (```…```) and
+// inline code spans (`…`) to avoid mangling code samples.
+function injectCitations(content: string, sources?: string[]): string {
+  // Split on code fences / inline code, only process non-code segments.
+  const parts = content.split(/(```[\s\S]*?```|`[^`]+`)/g)
+  return parts
+    .map((part, i) => {
+      if (i % 2 === 1) return part // code segment – leave as-is
+      return part.replace(/\[(\d+)\]/g, (_, num) => {
+        const idx = parseInt(num, 10) - 1
+        const src = (sources?.[idx] ?? `מקור ${num}`).replace(/"/g, "&quot;")
+        return `<cite title="${src}">${num}</cite>`
+      })
+    })
+    .join("")
+}
+
+// Circular badge that shows source name on hover
+function CiteBadge({ children, title }: { children: React.ReactNode; title?: string }) {
+  return (
+    <TooltipProvider delayDuration={150}>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <sup
+            className={cn(
+              "inline-flex items-center justify-center",
+              "w-[1.1rem] h-[1.1rem] rounded-full",
+              "bg-sky-500 hover:bg-sky-600 transition-colors",
+              "text-white text-[9px] font-bold leading-none",
+              "cursor-default select-none mx-0.5 align-super"
+            )}
+          >
+            {children}
+          </sup>
+        </TooltipTrigger>
+        {title && (
+          <TooltipContent side="top" className="max-w-[260px] truncate">
+            {title}
+          </TooltipContent>
+        )}
+      </Tooltip>
+    </TooltipProvider>
+  )
 }
 
 export function MessageBubble({ message }: MessageBubbleProps) {
@@ -47,11 +95,16 @@ export function MessageBubble({ message }: MessageBubbleProps) {
     )
   }
 
+  // Pre-process content: [n] → <cite title="…">n</cite>
+  const processedContent = isUser
+    ? message.content
+    : injectCitations(message.content, message.sources)
+
   return (
     <div className={cn("flex w-full mb-4", isUser ? "justify-start" : "justify-end")}>
       <div className={cn("max-w-[80%] flex flex-col gap-1", isUser ? "items-start" : "items-end")}>
 
-        {/* Thinking steps toggle (Gemini-style, above the bubble) */}
+        {/* Thinking steps toggle */}
         {!isUser && hasThinking && (
           <div className="mb-0.5 w-full">
             <button
@@ -70,7 +123,6 @@ export function MessageBubble({ message }: MessageBubbleProps) {
               )} />
             </button>
 
-            {/* Thinking steps expanded */}
             <div className={cn(
               "overflow-hidden transition-all duration-300 ease-in-out",
               showThinking ? "max-h-[400px] opacity-100" : "max-h-0 opacity-0"
@@ -82,11 +134,9 @@ export function MessageBubble({ message }: MessageBubbleProps) {
                     className="relative flex items-start gap-2 py-0.5 animate-fadeIn"
                     style={{ animationDelay: `${index * 40}ms` }}
                   >
-                    {/* Timeline dot */}
                     <div className="absolute -end-[0.94rem] top-[0.45rem]">
                       <span className="w-1.5 h-1.5 rounded-full bg-sky-400/60 block" />
                     </div>
-
                     <span className="text-xs leading-none mt-0.5 shrink-0">{step.icon}</span>
                     <div className="min-w-0 flex-1">
                       <span className="text-[12px] text-muted-foreground leading-snug">{step.label}</span>
@@ -121,6 +171,12 @@ export function MessageBubble({ message }: MessageBubbleProps) {
                 remarkPlugins={[remarkGfm]}
                 rehypePlugins={[rehypeRaw]}
                 components={{
+                  // Citation badge — rendered from <cite title="…">n</cite>
+                  cite: ({ node, children }) => (
+                    <CiteBadge title={(node as any)?.properties?.title}>
+                      {children}
+                    </CiteBadge>
+                  ),
                   h1: ({ children }) => (
                     <h1 className="text-lg font-bold mt-3 mb-2 text-foreground">{children}</h1>
                   ),
@@ -194,7 +250,7 @@ export function MessageBubble({ message }: MessageBubbleProps) {
                   ),
                 }}
               >
-                {message.content}
+                {processedContent}
               </ReactMarkdown>
             </div>
           )}
