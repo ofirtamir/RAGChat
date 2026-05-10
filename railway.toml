@@ -4,9 +4,5 @@ dockerfilePath = "Dockerfile"
 
 [deploy]
 # Railway sets $PORT automatically; the Dockerfile CMD uses it.
-restartPolicyType = "on-failure"
+restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 3
-
-# Mount a persistent volume at /app/data so ChromaDB & uploads survive deploys.
-# Configure this volume in the Railway dashboard:
-#   Service → Volumes → Mount path: /app/data
