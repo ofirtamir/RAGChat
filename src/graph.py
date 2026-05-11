@@ -672,12 +672,14 @@ def stream_rag_pipeline(
             "detail": "",
         }
 
-        # Build the LLM chain and stream tokens
-        # Pass the same config (with Langfuse callback) so the generation is traced
+        # Build the LLM chain and stream tokens.
+        # NOTE: we intentionally do NOT pass the Langfuse config here —
+        # the graph trace already captured all pipeline nodes, and passing
+        # the callback again would create a duplicate trace.
         chain, inputs = _build_llm_chain(final_state, target_node)
 
         full_answer = ""
-        for token_chunk in chain.stream(inputs, config=config):
+        for token_chunk in chain.stream(inputs):
             full_answer += token_chunk
             yield {"type": "token", "content": token_chunk}
 
