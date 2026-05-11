@@ -465,7 +465,7 @@ def _build_config(session_id: str | None, user_id: str | None, query: str) -> tu
     from src.observability import get_langfuse_handler
 
     config: dict = {}
-    handler, _ = get_langfuse_handler(
+    handler, langfuse_metadata = get_langfuse_handler(
         session_id=session_id,
         user_id=user_id,
         trace_name="rag-pipeline",
@@ -473,6 +473,7 @@ def _build_config(session_id: str | None, user_id: str | None, query: str) -> tu
     )
     if handler:
         config["callbacks"] = [handler]
+        config["metadata"] = langfuse_metadata
     return config, handler
 
 

@@ -282,11 +282,8 @@ async def debug_langfuse():
         from langfuse.langchain import CallbackHandler
         result["callback_import"] = "langfuse.langchain"
 
-        handler = CallbackHandler(
-            session_id="debug-session",
-            user_id="debug-user",
-            trace_name="ragchat-debug-handler",
-        )
+        # v3: no constructor args; context via LangChain metadata
+        handler = CallbackHandler()
         handler.flush()
         result["callback_handler"] = "OK"
     except Exception as e:

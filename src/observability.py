@@ -79,13 +79,19 @@ def get_langfuse_handler(
     try:
         from langfuse.langchain import CallbackHandler
 
-        handler = CallbackHandler(
-            session_id=session_id,
-            user_id=user_id,
-            trace_name=trace_name,
-            metadata=metadata or {},
-        )
-        return handler, {}
+        # In langfuse v3, the CallbackHandler takes NO constructor args.
+        # Session/user/trace context is passed via LangChain run metadata
+        # using special langfuse_* keys that the handler reads at runtime.
+        handler = CallbackHandler()
+
+        langfuse_metadata = {
+            **(metadata or {}),
+            "langfuse_session_id": session_id,
+            "langfuse_user_id": user_id,
+            "langfuse_trace_name": trace_name,
+        }
+
+        return handler, langfuse_metadata
     except Exception as e:
         logger.warning("Failed to create Langfuse CallbackHandler: %s", e)
         return None, {}
