@@ -77,7 +77,7 @@ def get_langfuse_handler(
         return None, {}
 
     try:
-        from langfuse.callback import CallbackHandler
+        from langfuse.langchain import CallbackHandler
 
         handler = CallbackHandler(
             session_id=session_id,

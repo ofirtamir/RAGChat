@@ -268,30 +268,22 @@ async def debug_langfuse():
         result["verdict"] = "SKIP – Langfuse not enabled/initialized"
         return result
 
-    # ── 2. Direct SDK trace (no LangChain) — Langfuse v3 API ─────────────
+    # ── 2. SDK flush (verifies client is alive) ───────────────────────────
     try:
         from langfuse import Langfuse
         client = Langfuse()
-        # v3: client.trace() creates a trace object
-        trace = client.trace(
-            name="ragchat-debug-ping",
-            session_id="debug",
-            input={"source": "/api/debug/langfuse"},
-            output={"ok": True},
-        )
         client.flush()
-        result["direct_trace"] = "OK"
-        result["trace_id"] = trace.id
+        result["sdk_flush"] = "OK"
     except Exception as e:
-        result["direct_trace"] = f"ERROR: {e}"
+        result["sdk_flush"] = f"ERROR: {e}"
 
-    # ── 3. CallbackHandler creation — Langfuse v3 API ────────────────────
+    # ── 3. CallbackHandler creation — langfuse.langchain (v3 API) ─────────
     try:
-        from langfuse.callback import CallbackHandler
-        result["callback_import"] = "langfuse.callback"
+        from langfuse.langchain import CallbackHandler
+        result["callback_import"] = "langfuse.langchain"
 
         handler = CallbackHandler(
-            session_id="debug",
+            session_id="debug-session",
             user_id="debug-user",
             trace_name="ragchat-debug-handler",
         )
@@ -307,5 +299,5 @@ async def debug_langfuse():
     except Exception:
         result["langfuse_version"] = "unknown"
 
-    result["verdict"] = "OK" if result.get("direct_trace") == "OK" else "FAIL"
+    result["verdict"] = "OK" if result.get("callback_handler") == "OK" else "FAIL"
     return result
