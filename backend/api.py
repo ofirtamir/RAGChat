@@ -105,15 +105,6 @@ def _serialize_pydantic(obj):
 
 def _run_stream_in_thread(query: str, chat_history: list, session_id: str, q: Queue):
     """Run the sync stream_rag_pipeline in a thread and push events to a queue."""
-    # DEBUG: Log what the backend receives from the frontend
-    print(f"\n{'#'*60}")
-    print(f"[DEBUG API] query='{query[:80]}'")
-    print(f"[DEBUG API] chat_history length: {len(chat_history)}")
-    for i, msg in enumerate(chat_history):
-        role = msg.get('role', '?')
-        content = msg.get('content', '')
-        print(f"[DEBUG API] chat_history[{i}]: role={role}, content_len={len(content)}, preview='{content[:80]}'")
-    print(f"{'#'*60}\n")
     try:
         for event in stream_rag_pipeline(
             query=query,
@@ -249,4 +240,8 @@ async def delete_documents():
 
 @app.get("/api/health")
 async def health():
-    return {"status": "ok"}
+    from src.observability import is_langfuse_enabled
+    return {
+        "status": "ok",
+        "langfuse": is_langfuse_enabled(),
+    }

@@ -461,7 +461,7 @@ def _build_config(session_id: str | None, user_id: str | None, query: str) -> di
     from src.observability import get_langfuse_handler
 
     config = {}
-    handler, langfuse_metadata = get_langfuse_handler(
+    handler, _ = get_langfuse_handler(
         session_id=session_id,
         user_id=user_id,
         trace_name="rag-pipeline",
@@ -469,7 +469,6 @@ def _build_config(session_id: str | None, user_id: str | None, query: str) -> di
     )
     if handler:
         config["callbacks"] = [handler]
-        config["metadata"] = langfuse_metadata
     return config
 
 
@@ -523,18 +522,6 @@ def _build_llm_chain(state: dict, node_name: str):
     query = state["query"]
     chat_history = state.get("chat_history", [])
     history = _build_history_messages(chat_history)
-
-    # DEBUG: Log chat history details
-    print(f"\n{'='*60}")
-    print(f"[DEBUG _build_llm_chain] node_name={node_name}")
-    print(f"[DEBUG] chat_history length: {len(chat_history)}")
-    for i, msg in enumerate(chat_history):
-        content_preview = msg.get('content', '')[:100]
-        print(f"[DEBUG] chat_history[{i}]: role={msg.get('role')}, content_len={len(msg.get('content', ''))}, preview='{content_preview}'")
-    print(f"[DEBUG] history (Message objects) length: {len(history)}")
-    for i, msg in enumerate(history):
-        print(f"[DEBUG] history[{i}]: type={type(msg).__name__}, content_len={len(msg.content)}, preview='{msg.content[:100]}'")
-    print(f"{'='*60}\n")
 
     if node_name == "chitchat":
         prompt = ChatPromptTemplate.from_messages([
@@ -640,18 +627,6 @@ def stream_rag_pipeline(
                 "detail": detail,
             }
 
-    # DEBUG: Log final_state after graph completes
-    print(f"\n{'='*60}")
-    print(f"[DEBUG stream_rag_pipeline] Graph complete.")
-    print(f"[DEBUG] llm_node_name={llm_node_name}")
-    print(f"[DEBUG] final_state keys: {list(final_state.keys())}")
-    print(f"[DEBUG] final_state['answer'] = '{final_state.get('answer', '')[:100]}'")
-    print(f"[DEBUG] final_state['chat_history'] length: {len(final_state.get('chat_history', []))}")
-    for i, msg in enumerate(final_state.get('chat_history', [])):
-        content_preview = msg.get('content', '')[:80] if isinstance(msg, dict) else str(msg)[:80]
-        print(f"[DEBUG] chat_history[{i}]: {content_preview}")
-    print(f"{'='*60}\n")
-
     # If answer was already set (e.g., check_documents "no docs" message), just return
     if final_state.get("answer"):
         yield {"type": "result", "data": _build_result(final_state, query)}
@@ -669,10 +644,11 @@ def stream_rag_pipeline(
     }
 
     # Build the LLM chain and stream tokens
+    # Pass the same config (with Langfuse callback) so the generation is traced
     chain, inputs = _build_llm_chain(final_state, target_node)
 
     full_answer = ""
-    for token_chunk in chain.stream(inputs):
+    for token_chunk in chain.stream(inputs, config=config):
         full_answer += token_chunk
         yield {"type": "token", "content": token_chunk}
 

@@ -1,10 +1,11 @@
 """
-Langfuse v4 observability integration for tracing the RAG pipeline.
-Uses the LangChain CallbackHandler with metadata-based session/user tracking.
-Gracefully degrades if langfuse is not installed.
+Langfuse observability integration for tracing the RAG pipeline.
+Uses the LangChain CallbackHandler for session/user tracking.
+Gracefully degrades if langfuse is not installed or credentials are missing.
 """
 
 import os
+import uuid
 import logging
 
 from config import (
@@ -27,10 +28,14 @@ def initialize_langfuse() -> bool:
     global _langfuse_initialized
 
     if not LANGFUSE_ENABLED:
+        logger.info(
+            "Langfuse disabled — LANGFUSE_SECRET_KEY / LANGFUSE_PUBLIC_KEY not set. "
+            "Set them as environment variables (Railway dashboard in production)."
+        )
         return False
 
     try:
-        # Langfuse v4 reads credentials from env vars
+        # Ensure env vars are set so the SDK picks them up automatically
         os.environ["LANGFUSE_SECRET_KEY"] = LANGFUSE_SECRET_KEY
         os.environ["LANGFUSE_PUBLIC_KEY"] = LANGFUSE_PUBLIC_KEY
         os.environ["LANGFUSE_HOST"] = LANGFUSE_HOST
@@ -39,14 +44,19 @@ def initialize_langfuse() -> bool:
         client = Langfuse()
         client.auth_check()
         _langfuse_initialized = True
-        logger.info("Langfuse initialized and authenticated successfully")
+        logger.info("✅ Langfuse initialized and authenticated (host=%s)", LANGFUSE_HOST)
         return True
     except ImportError:
-        logger.warning("langfuse package not installed. Install with: pip install langfuse")
+        logger.warning("langfuse package not installed — pip install langfuse")
         return False
     except Exception as e:
-        logger.warning(f"Failed to initialize Langfuse: {e}")
+        logger.warning("⚠️  Langfuse auth_check failed: %s", e)
         return False
+
+
+def is_langfuse_enabled() -> bool:
+    """Return True only when credentials are present and auth succeeded."""
+    return LANGFUSE_ENABLED and _langfuse_initialized
 
 
 def get_langfuse_handler(
@@ -58,38 +68,29 @@ def get_langfuse_handler(
     """
     Create a Langfuse CallbackHandler for LangChain/LangGraph tracing.
 
-    In Langfuse v4, session_id and user_id are passed via LangChain run
-    metadata keys: 'langfuse_session_id' and 'langfuse_user_id'.
+    Pass the returned handler in the LangChain/LangGraph config dict:
+        config = {"callbacks": [handler]}
 
-    Returns a (handler, config_metadata) tuple, or (None, {}) if unavailable.
+    Returns (handler, {}) or (None, {}) when unavailable.
     """
     if not LANGFUSE_ENABLED or not _langfuse_initialized:
         return None, {}
 
     try:
-        from langfuse import Langfuse
-        from langfuse.langchain import CallbackHandler
+        # Try the canonical import path first; fall back to legacy path
+        try:
+            from langfuse.callback import CallbackHandler
+        except ImportError:
+            from langfuse.langchain import CallbackHandler  # type: ignore[no-redef]
 
-        # Create a unique trace_id
-        client = Langfuse()
-        trace_id = client.create_trace_id()
-
-        # Create handler linked to this trace
         handler = CallbackHandler(
-            trace_context={"trace_id": trace_id},
+            trace_id=str(uuid.uuid4()),   # unique trace per request
+            session_id=session_id,
+            user_id=user_id,
+            trace_name=trace_name,
+            metadata=metadata or {},
         )
-
-        # Langfuse v4 reads these special metadata keys from LangChain runs
-        langfuse_metadata = {
-            **(metadata or {}),
-            "langfuse_session_id": session_id,
-            "langfuse_user_id": user_id,
-        }
-
-        return handler, langfuse_metadata
-    except ImportError:
-        logger.warning("langfuse.langchain not available")
-        return None, {}
+        return handler, {}
     except Exception as e:
-        logger.warning(f"Failed to create Langfuse handler: {e}")
+        logger.warning("Failed to create Langfuse CallbackHandler: %s", e)
         return None, {}
