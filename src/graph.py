@@ -519,11 +519,8 @@ def run_rag_pipeline(
     finally:
         # Flush Langfuse events immediately — avoids losing traces when the
         # SDK's background batch worker hasn't fired yet.
-        if lf_handler:
-            try:
-                lf_handler.flush()
-            except Exception:
-                pass
+        from src.observability import flush_langfuse
+        flush_langfuse()
 
 
 def _build_llm_chain(state: dict, node_name: str):
@@ -673,11 +670,8 @@ def stream_rag_pipeline(
     finally:
         # Flush Langfuse immediately so batched spans aren't lost when the
         # background worker hasn't fired yet in the ThreadPoolExecutor thread.
-        if lf_handler:
-            try:
-                lf_handler.flush()
-            except Exception:
-                pass
+        from src.observability import flush_langfuse
+        flush_langfuse()
 
 
 def _get_step_detail(node_name: str, state: dict) -> str:

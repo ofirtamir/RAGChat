@@ -284,8 +284,8 @@ async def debug_langfuse():
 
         # v3: no constructor args; context via LangChain metadata
         handler = CallbackHandler()
-        handler.flush()
         result["callback_handler"] = "OK"
+        result["handler_type"] = type(handler).__name__
     except Exception as e:
         result["callback_handler"] = f"ERROR: {e}"
 

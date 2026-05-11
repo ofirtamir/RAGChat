@@ -59,6 +59,17 @@ def is_langfuse_enabled() -> bool:
     return LANGFUSE_ENABLED and _langfuse_initialized
 
 
+def flush_langfuse() -> None:
+    """Flush pending Langfuse events via the singleton client."""
+    if not is_langfuse_enabled():
+        return
+    try:
+        from langfuse import Langfuse
+        Langfuse().flush()
+    except Exception:
+        pass
+
+
 def get_langfuse_handler(
     session_id: str | None = None,
     user_id: str | None = None,
