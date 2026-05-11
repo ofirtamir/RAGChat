@@ -77,14 +77,9 @@ def get_langfuse_handler(
         return None, {}
 
     try:
-        # Try the canonical import path first; fall back to legacy path
-        try:
-            from langfuse.callback import CallbackHandler
-        except ImportError:
-            from langfuse.langchain import CallbackHandler  # type: ignore[no-redef]
+        from langfuse.callback import CallbackHandler
 
         handler = CallbackHandler(
-            trace_id=str(uuid.uuid4()),   # unique trace per request
             session_id=session_id,
             user_id=user_id,
             trace_name=trace_name,

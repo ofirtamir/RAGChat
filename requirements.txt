@@ -10,4 +10,4 @@ streamlit>=1.38.0
 pypdf>=4.0.0
 unstructured>=0.15.0
 python-dotenv>=1.0.0
-langfuse>=4.0.0
+langfuse>=3.0.0,<4.0.0

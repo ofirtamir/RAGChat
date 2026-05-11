@@ -268,12 +268,12 @@ async def debug_langfuse():
         result["verdict"] = "SKIP – Langfuse not enabled/initialized"
         return result
 
-    # ── 2. Direct SDK trace (no LangChain) ───────────────────────────────
+    # ── 2. Direct SDK trace (no LangChain) — Langfuse v3 API ─────────────
     try:
         from langfuse import Langfuse
         client = Langfuse()
+        # v3: client.trace() creates a trace object
         trace = client.trace(
-            id=str(_uuid.uuid4()),
             name="ragchat-debug-ping",
             session_id="debug",
             input={"source": "/api/debug/langfuse"},
@@ -285,17 +285,12 @@ async def debug_langfuse():
     except Exception as e:
         result["direct_trace"] = f"ERROR: {e}"
 
-    # ── 3. CallbackHandler creation ───────────────────────────────────────
+    # ── 3. CallbackHandler creation — Langfuse v3 API ────────────────────
     try:
-        try:
-            from langfuse.callback import CallbackHandler
-            result["callback_import"] = "langfuse.callback"
-        except ImportError:
-            from langfuse.langchain import CallbackHandler  # type: ignore
-            result["callback_import"] = "langfuse.langchain"
+        from langfuse.callback import CallbackHandler
+        result["callback_import"] = "langfuse.callback"
 
         handler = CallbackHandler(
-            trace_id=str(_uuid.uuid4()),
             session_id="debug",
             user_id="debug-user",
             trace_name="ragchat-debug-handler",
