@@ -95,11 +95,15 @@ def get_langfuse_handler(
         # using special langfuse_* keys that the handler reads at runtime.
         handler = CallbackHandler()
 
+        # A shared trace_id groups all LangChain invocations (graph +
+        # chain.stream) under a single Langfuse trace instead of creating
+        # separate "LangGraph" / "RunnableSequence" traces per call.
         langfuse_metadata = {
             **(metadata or {}),
             "langfuse_session_id": session_id,
             "langfuse_user_id": user_id,
             "langfuse_trace_name": trace_name,
+            "langfuse_trace_id": str(uuid.uuid4()),
         }
 
         return handler, langfuse_metadata
