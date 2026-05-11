@@ -25,10 +25,13 @@ function injectCitations(content: string, sources?: string[]): string {
   return parts
     .map((part, i) => {
       if (i % 2 === 1) return part // code segment – leave as-is
-      return part.replace(/\[(\d+)\]/g, (_, num) => {
-        const idx = parseInt(num, 10) - 1
-        const src = (sources?.[idx] ?? `מקור ${num}`).replace(/"/g, "&quot;")
-        return `<cite title="${src}">${num}</cite>`
+      // Match [1], [2, 3], [3, 4, 5] etc.
+      return part.replace(/\[(\d+(?:\s*,\s*\d+)*)\]/g, (_, nums) => {
+        return nums.split(/\s*,\s*/).map((num: string) => {
+          const idx = parseInt(num, 10) - 1
+          const src = (sources?.[idx] ?? `מקור ${num}`).replace(/"/g, "&quot;")
+          return `<cite title="${src}">${num}</cite>`
+        }).join("")
       })
     })
     .join("")
