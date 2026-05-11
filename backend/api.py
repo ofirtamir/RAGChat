@@ -66,6 +66,7 @@ class ChatRequest(BaseModel):
 class ChatResponse(BaseModel):
     answer: str
     sources: list[str]
+    citations: list[dict] = []
     route: dict | None
     rewritten: dict | None
     full_doc_decision: dict | None
@@ -85,6 +86,7 @@ async def chat(request: ChatRequest):
         return ChatResponse(
             answer=result["answer"],
             sources=result.get("sources", []),
+            citations=result.get("citations", []),
             route=result.get("route").model_dump() if result.get("route") else None,
             rewritten=result.get("rewritten").model_dump() if result.get("rewritten") else None,
             full_doc_decision=result.get("full_doc_decision").model_dump() if result.get("full_doc_decision") else None,
@@ -171,6 +173,7 @@ async def chat_stream(request: ChatRequest):
                 result_payload = json.dumps({
                     "answer": data["answer"],
                     "sources": data.get("sources", []),
+                    "citations": data.get("citations", []),
                     "route": _serialize_pydantic(data.get("route")),
                     "rewritten": _serialize_pydantic(data.get("rewritten")),
                     "full_doc_decision": _serialize_pydantic(data.get("full_doc_decision")),

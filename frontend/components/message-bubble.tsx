@@ -4,7 +4,7 @@ import { useState } from "react"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 import rehypeRaw from "rehype-raw"
-import { Message } from "@/types/chat"
+import { Message, CitationDetail } from "@/types/chat"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
@@ -15,11 +15,11 @@ interface MessageBubbleProps {
   message: Message
 }
 
-// Replace [1], [2], … with <cite title="filename.pdf">1</cite>
-// so ReactMarkdown's custom "cite" component can render a badge.
+// Replace [1], [2], [3, 4, 5] … with <cite title="…" data-snippet="…">n</cite>
+// so ReactMarkdown's custom "cite" component can render a hoverable badge.
 // We deliberately skip replacement inside fenced code blocks (```…```) and
 // inline code spans (`…`) to avoid mangling code samples.
-function injectCitations(content: string, sources?: string[]): string {
+function injectCitations(content: string, citations?: CitationDetail[]): string {
   // Split on code fences / inline code, only process non-code segments.
   const parts = content.split(/(```[\s\S]*?```|`[^`]+`)/g)
   return parts
@@ -29,16 +29,18 @@ function injectCitations(content: string, sources?: string[]): string {
       return part.replace(/\[(\d+(?:\s*,\s*\d+)*)\]/g, (_, nums) => {
         return nums.split(/\s*,\s*/).map((num: string) => {
           const idx = parseInt(num, 10) - 1
-          const src = (sources?.[idx] ?? `מקור ${num}`).replace(/"/g, "&quot;")
-          return `<cite title="${src}">${num}</cite>`
+          const cite = citations?.[idx]
+          const src = (cite?.source ?? `מקור ${num}`).replace(/"/g, "&quot;")
+          const snippet = (cite?.snippet ?? "").replace(/"/g, "&quot;")
+          return `<cite title="${src}" data-snippet="${snippet}">${num}</cite>`
         }).join("")
       })
     })
     .join("")
 }
 
-// Circular badge that shows source name on hover
-function CiteBadge({ children, title }: { children: React.ReactNode; title?: string }) {
+// Circular badge that shows source name + chunk snippet on hover
+function CiteBadge({ children, title, snippet }: { children: React.ReactNode; title?: string; snippet?: string }) {
   return (
     <TooltipProvider delayDuration={150}>
       <Tooltip>
@@ -55,9 +57,21 @@ function CiteBadge({ children, title }: { children: React.ReactNode; title?: str
             {children}
           </sup>
         </TooltipTrigger>
-        {title && (
-          <TooltipContent side="top" className="max-w-[260px] truncate">
-            {title}
+        {(title || snippet) && (
+          <TooltipContent side="top" className="max-w-[350px] p-3">
+            <div className="space-y-1.5" dir="rtl">
+              {title && (
+                <p className="font-semibold text-xs flex items-center gap-1.5">
+                  <FileText className="w-3 h-3 shrink-0 text-sky-300" />
+                  {title}
+                </p>
+              )}
+              {snippet && (
+                <p className="text-[11px] text-primary-foreground/70 leading-relaxed line-clamp-3">
+                  {snippet}…
+                </p>
+              )}
+            </div>
           </TooltipContent>
         )}
       </Tooltip>
@@ -98,10 +112,10 @@ export function MessageBubble({ message }: MessageBubbleProps) {
     )
   }
 
-  // Pre-process content: [n] → <cite title="…">n</cite>
+  // Pre-process content: [n] → <cite title="…" data-snippet="…">n</cite>
   const processedContent = isUser
     ? message.content
-    : injectCitations(message.content, message.sources)
+    : injectCitations(message.content, message.citations)
 
   return (
     <div className={cn("flex w-full mb-4", isUser ? "justify-start" : "justify-end")}>
@@ -174,9 +188,12 @@ export function MessageBubble({ message }: MessageBubbleProps) {
                 remarkPlugins={[remarkGfm]}
                 rehypePlugins={[rehypeRaw]}
                 components={{
-                  // Citation badge — rendered from <cite title="…">n</cite>
+                  // Citation badge — rendered from <cite title="…" data-snippet="…">n</cite>
                   cite: ({ node, children }) => (
-                    <CiteBadge title={(node as any)?.properties?.title}>
+                    <CiteBadge
+                      title={(node as any)?.properties?.title}
+                      snippet={(node as any)?.properties?.dataSnippet}
+                    >
                       {children}
                     </CiteBadge>
                   ),

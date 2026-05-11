@@ -119,6 +119,7 @@ export function ChatLayout() {
         role: "assistant",
         content: result.answer,
         sources: result.sources,
+        citations: result.citations,
         route: result.route,
         rewritten: result.rewritten,
         fullDocDecision: result.full_doc_decision,

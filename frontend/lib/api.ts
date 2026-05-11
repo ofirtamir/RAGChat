@@ -10,6 +10,7 @@ const API_BASE = `${BACKEND_ORIGIN}/api`
 export interface ChatApiResponse {
   answer: string
   sources: string[]
+  citations?: { source: string; snippet: string }[]
   route: { needs_retrieval: boolean; reasoning: string } | null
   rewritten: { original_query: string; rewritten_queries: string[]; reasoning: string } | null
   full_doc_decision: { needs_full_document: boolean; target_sources: string[]; reasoning: string } | null

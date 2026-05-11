@@ -1,8 +1,14 @@
+export interface CitationDetail {
+  source: string
+  snippet: string
+}
+
 export interface Message {
   id: string
   role: "user" | "assistant"
   content: string
   sources?: string[]
+  citations?: CitationDetail[]
   route?: RouteInfo | null
   rewritten?: RewrittenQuery | null
   fullDocDecision?: FullDocDecision | null

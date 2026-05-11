@@ -72,6 +72,16 @@ def _extract_sources(docs: list[Document]) -> list[str]:
     return list({doc.metadata.get("source", "unknown") for doc in docs})
 
 
+def _extract_citations(docs: list[Document], snippet_len: int = 150) -> list[dict]:
+    """Return ordered citation details matching [1], [2], … numbering in _format_docs."""
+    citations = []
+    for doc in docs:
+        source = doc.metadata.get("source", "unknown")
+        snippet = doc.page_content[:snippet_len].strip()
+        citations.append({"source": source, "snippet": snippet})
+    return citations
+
+
 def _build_history_messages(chat_history: list[dict], limit: int = 10) -> list:
     """Convert chat history to LangChain Message objects (NOT tuples).
     Using Message objects avoids template variable interpolation issues
@@ -497,6 +507,7 @@ def _build_result(result: dict, query: str) -> dict:
         "answer": result["answer"],
         "plan": result.get("plan") or create_fallback_plan(query),
         "sources": result.get("sources", []),
+        "citations": _extract_citations(result.get("documents", [])),
         "route": result.get("route"),
         "rewritten": result.get("rewritten"),
         "full_doc_decision": result.get("full_doc_decision"),
