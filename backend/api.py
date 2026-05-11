@@ -245,3 +245,72 @@ async def health():
         "status": "ok",
         "langfuse": is_langfuse_enabled(),
     }
+
+
+@app.get("/api/debug/langfuse")
+async def debug_langfuse():
+    """
+    Diagnostic endpoint — tests every layer of the Langfuse integration.
+    Safe to call in production (read-only / single test trace).
+    """
+    import uuid as _uuid
+    result: dict = {}
+
+    # ── 1. Config / env vars ──────────────────────────────────────────────
+    from config import LANGFUSE_ENABLED, LANGFUSE_SECRET_KEY, LANGFUSE_HOST
+    from src.observability import _langfuse_initialized
+    result["env_vars_set"] = LANGFUSE_ENABLED
+    result["host"] = LANGFUSE_HOST
+    result["initialized"] = _langfuse_initialized
+    result["secret_key_prefix"] = (LANGFUSE_SECRET_KEY or "")[:8] + "…" if LANGFUSE_SECRET_KEY else None
+
+    if not LANGFUSE_ENABLED or not _langfuse_initialized:
+        result["verdict"] = "SKIP – Langfuse not enabled/initialized"
+        return result
+
+    # ── 2. Direct SDK trace (no LangChain) ───────────────────────────────
+    try:
+        from langfuse import Langfuse
+        client = Langfuse()
+        trace = client.trace(
+            id=str(_uuid.uuid4()),
+            name="ragchat-debug-ping",
+            session_id="debug",
+            input={"source": "/api/debug/langfuse"},
+            output={"ok": True},
+        )
+        client.flush()
+        result["direct_trace"] = "OK"
+        result["trace_id"] = trace.id
+    except Exception as e:
+        result["direct_trace"] = f"ERROR: {e}"
+
+    # ── 3. CallbackHandler creation ───────────────────────────────────────
+    try:
+        try:
+            from langfuse.callback import CallbackHandler
+            result["callback_import"] = "langfuse.callback"
+        except ImportError:
+            from langfuse.langchain import CallbackHandler  # type: ignore
+            result["callback_import"] = "langfuse.langchain"
+
+        handler = CallbackHandler(
+            trace_id=str(_uuid.uuid4()),
+            session_id="debug",
+            user_id="debug-user",
+            trace_name="ragchat-debug-handler",
+        )
+        handler.flush()
+        result["callback_handler"] = "OK"
+    except Exception as e:
+        result["callback_handler"] = f"ERROR: {e}"
+
+    # ── 4. langfuse package version ───────────────────────────────────────
+    try:
+        import importlib.metadata
+        result["langfuse_version"] = importlib.metadata.version("langfuse")
+    except Exception:
+        result["langfuse_version"] = "unknown"
+
+    result["verdict"] = "OK" if result.get("direct_trace") == "OK" else "FAIL"
+    return result

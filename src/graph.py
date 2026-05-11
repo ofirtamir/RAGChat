@@ -456,11 +456,15 @@ NODE_LABELS = {
 }
 
 
-def _build_config(session_id: str | None, user_id: str | None, query: str) -> dict:
-    """Build LangGraph invoke/stream config with optional Langfuse handler."""
+def _build_config(session_id: str | None, user_id: str | None, query: str) -> tuple[dict, object]:
+    """
+    Build LangGraph invoke/stream config with optional Langfuse handler.
+    Returns (config_dict, handler_or_None) — caller should flush() the handler
+    after the pipeline completes so batched events are sent immediately.
+    """
     from src.observability import get_langfuse_handler
 
-    config = {}
+    config: dict = {}
     handler, _ = get_langfuse_handler(
         session_id=session_id,
         user_id=user_id,
@@ -469,7 +473,7 @@ def _build_config(session_id: str | None, user_id: str | None, query: str) -> di
     )
     if handler:
         config["callbacks"] = [handler]
-    return config
+    return config, handler
 
 
 def _build_initial_state(query: str, chat_history: list[dict] | None, skip_generation: bool = False) -> GraphState:
@@ -506,10 +510,19 @@ def run_rag_pipeline(
 ) -> dict:
     """Main entry point for the LangGraph RAG pipeline (non-streaming)."""
     initial_state = _build_initial_state(query, chat_history)
-    config = _build_config(session_id, user_id, query)
+    config, lf_handler = _build_config(session_id, user_id, query)
 
-    result = _rag_graph.invoke(initial_state, config=config)
-    return _build_result(result, query)
+    try:
+        result = _rag_graph.invoke(initial_state, config=config)
+        return _build_result(result, query)
+    finally:
+        # Flush Langfuse events immediately — avoids losing traces when the
+        # SDK's background batch worker hasn't fired yet.
+        if lf_handler:
+            try:
+                lf_handler.flush()
+            except Exception:
+                pass
 
 
 def _build_llm_chain(state: dict, node_name: str):
@@ -601,59 +614,69 @@ def stream_rag_pipeline(
       {"type": "result", "data": { full result dict }}
     """
     initial_state = _build_initial_state(query, chat_history, skip_generation=True)
-    config = _build_config(session_id, user_id, query)
+    config, lf_handler = _build_config(session_id, user_id, query)
 
     # LangGraph stream yields (node_name, state_update) dicts
     final_state = dict(initial_state)
     llm_node_name = None  # Track which node should generate the LLM response
 
-    for chunk in _rag_graph.stream(initial_state, config=config):
-        for node_name, state_update in chunk.items():
-            if isinstance(state_update, dict):
-                final_state.update(state_update)
+    try:
+        for chunk in _rag_graph.stream(initial_state, config=config):
+            for node_name, state_update in chunk.items():
+                if isinstance(state_update, dict):
+                    final_state.update(state_update)
 
-            # Skip step event for LLM nodes (we'll stream them manually)
-            if node_name in ("generator", "chitchat") and not final_state.get("answer"):
-                llm_node_name = node_name
-                continue
+                # Skip step event for LLM nodes (we'll stream them manually)
+                if node_name in ("generator", "chitchat") and not final_state.get("answer"):
+                    llm_node_name = node_name
+                    continue
 
-            meta = NODE_LABELS.get(node_name, {"label": node_name, "icon": "⚙️"})
-            detail = _get_step_detail(node_name, final_state)
-            yield {
-                "type": "step",
-                "node": node_name,
-                "label": meta["label"],
-                "icon": meta["icon"],
-                "detail": detail,
-            }
+                meta = NODE_LABELS.get(node_name, {"label": node_name, "icon": "⚙️"})
+                detail = _get_step_detail(node_name, final_state)
+                yield {
+                    "type": "step",
+                    "node": node_name,
+                    "label": meta["label"],
+                    "icon": meta["icon"],
+                    "detail": detail,
+                }
 
-    # If answer was already set (e.g., check_documents "no docs" message), just return
-    if final_state.get("answer"):
+        # If answer was already set (e.g., check_documents "no docs" message), just return
+        if final_state.get("answer"):
+            yield {"type": "result", "data": _build_result(final_state, query)}
+            return
+
+        # Emit the generator/chitchat step event
+        target_node = llm_node_name or "generator"
+        gen_meta = NODE_LABELS.get(target_node, {"label": "מייצר תשובה", "icon": "⚡"})
+        yield {
+            "type": "step",
+            "node": target_node,
+            "label": gen_meta["label"],
+            "icon": gen_meta["icon"],
+            "detail": "",
+        }
+
+        # Build the LLM chain and stream tokens
+        # Pass the same config (with Langfuse callback) so the generation is traced
+        chain, inputs = _build_llm_chain(final_state, target_node)
+
+        full_answer = ""
+        for token_chunk in chain.stream(inputs, config=config):
+            full_answer += token_chunk
+            yield {"type": "token", "content": token_chunk}
+
+        final_state["answer"] = full_answer
         yield {"type": "result", "data": _build_result(final_state, query)}
-        return
 
-    # Emit the generator/chitchat step event
-    target_node = llm_node_name or "generator"
-    gen_meta = NODE_LABELS.get(target_node, {"label": "מייצר תשובה", "icon": "⚡"})
-    yield {
-        "type": "step",
-        "node": target_node,
-        "label": gen_meta["label"],
-        "icon": gen_meta["icon"],
-        "detail": "",
-    }
-
-    # Build the LLM chain and stream tokens
-    # Pass the same config (with Langfuse callback) so the generation is traced
-    chain, inputs = _build_llm_chain(final_state, target_node)
-
-    full_answer = ""
-    for token_chunk in chain.stream(inputs, config=config):
-        full_answer += token_chunk
-        yield {"type": "token", "content": token_chunk}
-
-    final_state["answer"] = full_answer
-    yield {"type": "result", "data": _build_result(final_state, query)}
+    finally:
+        # Flush Langfuse immediately so batched spans aren't lost when the
+        # background worker hasn't fired yet in the ThreadPoolExecutor thread.
+        if lf_handler:
+            try:
+                lf_handler.flush()
+            except Exception:
+                pass
 
 
 def _get_step_detail(node_name: str, state: dict) -> str:
