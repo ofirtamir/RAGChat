@@ -1,18 +1,9 @@
 /** @type {import('next').NextConfig} */
 
-// In production the frontend calls the backend directly via NEXT_PUBLIC_BACKEND_ORIGIN.
-// The rewrite below is only active during local development (when the env var is not set).
-const BACKEND_ORIGIN = process.env.BACKEND_ORIGIN || "http://localhost:8000";
-
-const nextConfig = {
-  async rewrites() {
-    return [
-      {
-        source: "/api/:path*",
-        destination: `${BACKEND_ORIGIN}/api/:path*`,
-      },
-    ];
-  },
-};
+// The frontend always calls the backend directly via NEXT_PUBLIC_BACKEND_ORIGIN
+// (set in api.ts), so no /api/* rewrite is needed. A blanket rewrite would
+// also swallow /api/auth/* (NextAuth) and proxy it to localhost on Vercel,
+// triggering DNS_HOSTNAME_RESOLVED_PRIVATE.
+const nextConfig = {};
 
 export default nextConfig;
