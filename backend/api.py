@@ -137,11 +137,6 @@ async def chat_stream(request: ChatRequest):
     """Stream the RAG pipeline stages as SSE events, flushed in real-time."""
     session_id = request.session_id or str(uuid.uuid4())
     user_id = request.user_id or request.user_email
-    import logging
-    logging.getLogger("uvicorn.error").warning(
-        "[chat_stream] session_id=%s user_id=%s user_email=%s",
-        session_id, user_id, request.user_email,
-    )
 
     async def event_generator() -> AsyncGenerator[str, None]:
         q: Queue = Queue()

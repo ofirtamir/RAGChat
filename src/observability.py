@@ -90,26 +90,25 @@ def get_langfuse_handler(
     try:
         from langfuse.langchain import CallbackHandler
 
-        # In langfuse v3, the CallbackHandler takes NO constructor args.
-        # Session/user/trace context is passed via LangChain run metadata
-        # using special langfuse_* keys that the handler reads at runtime.
-        handler = CallbackHandler()
+        # In langfuse v3, the LangchainCallbackHandler takes NO constructor
+        # args EXCEPT update_trace.  Without `update_trace=True`, the
+        # langfuse_user_id / langfuse_session_id metadata keys are only
+        # applied to child spans — they never propagate to the parent
+        # trace, so the trace appears in Langfuse with no user attribution.
+        # See https://github.com/orgs/langfuse/discussions/8493
+        try:
+            handler = CallbackHandler(update_trace=True)
+        except TypeError:
+            # Fallback for older versions that don't accept update_trace
+            handler = CallbackHandler()
 
-        # A shared trace_id groups all LangChain invocations (graph +
-        # chain.stream) under a single Langfuse trace instead of creating
-        # separate "LangGraph" / "RunnableSequence" traces per call.
         langfuse_metadata = {
             **(metadata or {}),
             "langfuse_session_id": session_id,
             "langfuse_user_id": user_id,
             "langfuse_trace_name": trace_name,
-            "langfuse_trace_id": str(uuid.uuid4()),
         }
 
-        logging.getLogger("uvicorn.error").warning(
-            "[langfuse_handler] session_id=%s user_id=%s trace_name=%s",
-            session_id, user_id, trace_name,
-        )
         return handler, langfuse_metadata
     except Exception as e:
         logger.warning("Failed to create Langfuse CallbackHandler: %s", e)
