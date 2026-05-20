@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button"
 import { Separator } from "@/components/ui/separator"
 import { ThemeToggle } from "@/components/theme-toggle"
 import { DocumentsDialog } from "@/components/documents-dialog"
+import { UserMenu } from "@/components/user-menu"
 import { DocumentInfo } from "@/types/chat"
 import { Plus, MessageSquare, Database, BookOpen } from "lucide-react"
 import { cn } from "@/lib/utils"
@@ -118,6 +119,13 @@ export function Sidebar({
           {uploadError && (
             <p className="text-xs text-destructive px-1 leading-snug">{uploadError}</p>
           )}
+        </div>
+
+        <Separator />
+
+        {/* User menu — sits at the bottom of the sidebar */}
+        <div className="p-2">
+          <UserMenu />
         </div>
       </aside>
 

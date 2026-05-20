@@ -17,15 +17,27 @@ export interface ChatApiResponse {
   plan: { is_complex: boolean; sub_queries: string[]; reasoning: string } | null
 }
 
+export interface UserContext {
+  id?: string
+  email?: string | null
+}
+
 export async function sendMessage(
   query: string,
   chatHistory: { role: string; content: string }[],
-  sessionId: string
+  sessionId: string,
+  user?: UserContext
 ): Promise<ChatApiResponse> {
   const res = await fetch(`${API_BASE}/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ query, chat_history: chatHistory, session_id: sessionId }),
+    body: JSON.stringify({
+      query,
+      chat_history: chatHistory,
+      session_id: sessionId,
+      user_id: user?.id,
+      user_email: user?.email,
+    }),
   })
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: "Unknown error" }))
@@ -44,11 +56,18 @@ export async function sendMessageStreaming(
   sessionId: string,
   onStep: (step: ThinkingStep) => void,
   onToken: (token: string) => void,
+  user?: UserContext,
 ): Promise<ChatApiResponse> {
   const res = await fetch(`${API_BASE}/chat/stream`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ query, chat_history: chatHistory, session_id: sessionId }),
+    body: JSON.stringify({
+      query,
+      chat_history: chatHistory,
+      session_id: sessionId,
+      user_id: user?.id,
+      user_email: user?.email,
+    }),
   })
 
   if (!res.ok) {

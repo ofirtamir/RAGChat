@@ -1,6 +1,7 @@
 "use client"
 
 import { useState, useRef, useEffect, useCallback } from "react"
+import { useSession } from "next-auth/react"
 import { v4 as uuidv4 } from "uuid"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Button } from "@/components/ui/button"
@@ -18,6 +19,7 @@ function createSession(): ChatSession {
 }
 
 export function ChatLayout() {
+  const { data: authSession } = useSession()
   const [sessions, setSessions] = useState<ChatSession[]>(() => [createSession()])
   const [activeId, setActiveId] = useState<string>(() => "")
   const [input, setInput] = useState("")
@@ -107,6 +109,9 @@ export function ChatLayout() {
           setIsStreaming(true)
           setStreamingAnswer(prev => prev + token)
         },
+        authSession?.user
+          ? { id: authSession.user.id, email: authSession.user.email }
+          : undefined,
       )
 
       // Clear thinking/streaming state

@@ -61,6 +61,8 @@ class ChatRequest(BaseModel):
     query: str
     chat_history: list[dict] = []
     session_id: str | None = None
+    user_id: str | None = None
+    user_email: str | None = None
 
 
 class ChatResponse(BaseModel):
@@ -77,11 +79,14 @@ class ChatResponse(BaseModel):
 async def chat(request: ChatRequest):
     """Run the RAG pipeline and return the result."""
     session_id = request.session_id or str(uuid.uuid4())
+    # Prefer the Google sub as user_id; fall back to email if missing.
+    user_id = request.user_id or request.user_email
     try:
         result = run_rag_pipeline(
             query=request.query,
             chat_history=request.chat_history,
             session_id=session_id,
+            user_id=user_id,
         )
         return ChatResponse(
             answer=result["answer"],
@@ -105,13 +110,20 @@ def _serialize_pydantic(obj):
     return obj
 
 
-def _run_stream_in_thread(query: str, chat_history: list, session_id: str, q: Queue):
+def _run_stream_in_thread(
+    query: str,
+    chat_history: list,
+    session_id: str,
+    user_id: str | None,
+    q: Queue,
+):
     """Run the sync stream_rag_pipeline in a thread and push events to a queue."""
     try:
         for event in stream_rag_pipeline(
             query=query,
             chat_history=chat_history,
             session_id=session_id,
+            user_id=user_id,
         ):
             q.put(event)
         q.put(None)  # sentinel: done
@@ -124,6 +136,7 @@ def _run_stream_in_thread(query: str, chat_history: list, session_id: str, q: Qu
 async def chat_stream(request: ChatRequest):
     """Stream the RAG pipeline stages as SSE events, flushed in real-time."""
     session_id = request.session_id or str(uuid.uuid4())
+    user_id = request.user_id or request.user_email
 
     async def event_generator() -> AsyncGenerator[str, None]:
         q: Queue = Queue()
@@ -136,6 +149,7 @@ async def chat_stream(request: ChatRequest):
             request.query,
             request.chat_history,
             session_id,
+            user_id,
             q,
         )
 
