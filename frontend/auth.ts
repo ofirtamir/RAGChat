@@ -13,6 +13,11 @@ import Google from "next-auth/providers/google"
  * which returns the minimum identity fields: sub, email, name, picture.
  */
 export const { handlers, signIn, signOut, auth } = NextAuth({
+  // Required on Vercel — NextAuth derives the canonical URL from request headers
+  // (x-forwarded-host / x-forwarded-proto) rather than guessing.  Without this
+  // the OAuth callback URL can resolve to an internal Vercel hostname and trip
+  // the DNS_HOSTNAME_RESOLVED_PRIVATE block.
+  trustHost: true,
   providers: [Google],
   callbacks: {
     // Persist the Google `sub` as `id` on the session for use as Langfuse user_id.
