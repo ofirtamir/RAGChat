@@ -137,6 +137,7 @@ async def chat_stream(request: ChatRequest):
     """Stream the RAG pipeline stages as SSE events, flushed in real-time."""
     session_id = request.session_id or str(uuid.uuid4())
     user_id = request.user_id or request.user_email
+    print(f"[chat_stream] session_id={session_id} user_id={user_id} user_email={request.user_email}")
 
     async def event_generator() -> AsyncGenerator[str, None]:
         q: Queue = Queue()

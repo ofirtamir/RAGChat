@@ -106,6 +106,7 @@ def get_langfuse_handler(
             "langfuse_trace_id": str(uuid.uuid4()),
         }
 
+        print(f"[langfuse_handler] session_id={session_id} user_id={user_id} trace_name={trace_name}")
         return handler, langfuse_metadata
     except Exception as e:
         logger.warning("Failed to create Langfuse CallbackHandler: %s", e)
