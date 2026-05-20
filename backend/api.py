@@ -33,6 +33,7 @@ from src.vector_store import (
     get_all_chunks_for_source,
 )
 from src.observability import initialize_langfuse
+from src import sessions_store
 from config import UPLOADS_DIR
 
 app = FastAPI(title="RAGChat API", version="1.0.0")
@@ -253,6 +254,61 @@ async def delete_documents():
     """Clear all documents from the vector store."""
     clear_vector_store()
     return {"status": "cleared"}
+
+
+# ── Chat session persistence ─────────────────────────────────────────────
+# Each user gets their own SQLite-backed history. Lookups are scoped by
+# user_id so users only ever see / mutate their own sessions.
+
+class SessionUpsertRequest(BaseModel):
+    id: str
+    user_id: str
+    title: str
+    messages: list[dict]
+
+
+@app.get("/api/sessions")
+async def list_user_sessions(user_id: str):
+    """List all sessions for a user (no message bodies)."""
+    if not user_id:
+        raise HTTPException(status_code=400, detail="user_id is required")
+    return {"sessions": sessions_store.list_sessions(user_id)}
+
+
+@app.get("/api/sessions/{session_id}")
+async def get_user_session(session_id: str, user_id: str):
+    """Fetch a single session with all its messages."""
+    if not user_id:
+        raise HTTPException(status_code=400, detail="user_id is required")
+    session = sessions_store.get_session(session_id, user_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return session
+
+
+@app.put("/api/sessions/{session_id}")
+async def upsert_user_session(session_id: str, request: SessionUpsertRequest):
+    """Create or replace a session. Body must include the user_id of the owner."""
+    if session_id != request.id:
+        raise HTTPException(status_code=400, detail="path id does not match body id")
+    saved = sessions_store.save_session(
+        user_id=request.user_id,
+        session_id=request.id,
+        title=request.title,
+        messages=request.messages,
+    )
+    return saved
+
+
+@app.delete("/api/sessions/{session_id}")
+async def delete_user_session(session_id: str, user_id: str):
+    """Delete a session owned by user_id."""
+    if not user_id:
+        raise HTTPException(status_code=400, detail="user_id is required")
+    ok = sessions_store.delete_session(session_id, user_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return {"status": "deleted"}
 
 
 @app.get("/api/health")

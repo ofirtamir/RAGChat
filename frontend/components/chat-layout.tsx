@@ -10,7 +10,16 @@ import { Sidebar } from "@/components/sidebar"
 import { MessageBubble } from "@/components/message-bubble"
 import { ThinkingIndicator } from "@/components/thinking-indicator"
 import { Message, ChatSession, DocumentInfo, ThinkingStep } from "@/types/chat"
-import { sendMessageStreaming, uploadFiles, getDocuments, clearDocuments } from "@/lib/api"
+import {
+  sendMessageStreaming,
+  uploadFiles,
+  getDocuments,
+  clearDocuments,
+  listSessions,
+  getSession,
+  upsertSession,
+  deleteSession,
+} from "@/lib/api"
 import { Send, Sparkles } from "lucide-react"
 import { cn } from "@/lib/utils"
 
@@ -19,9 +28,11 @@ function createSession(): ChatSession {
 }
 
 export function ChatLayout() {
-  const { data: authSession } = useSession()
+  const { data: authSession, status: authStatus } = useSession()
+  const userId = authSession?.user?.id
   const [sessions, setSessions] = useState<ChatSession[]>(() => [createSession()])
   const [activeId, setActiveId] = useState<string>(() => "")
+  const [historyLoaded, setHistoryLoaded] = useState(false)
   const [input, setInput] = useState("")
   const [isLoading, setIsLoading] = useState(false)
   const [documents, setDocuments] = useState<DocumentInfo[]>([])
@@ -40,6 +51,47 @@ export function ChatLayout() {
   useEffect(() => {
     if (sessions.length > 0 && !activeId) setActiveId(sessions[0].id)
   }, [sessions, activeId])
+
+  // Load persisted history when the user signs in
+  useEffect(() => {
+    if (authStatus !== "authenticated" || !userId || historyLoaded) return
+    let cancelled = false
+    ;(async () => {
+      try {
+        const summaries = await listSessions(userId)
+        if (cancelled) return
+        if (summaries.length === 0) {
+          setHistoryLoaded(true)
+          return
+        }
+        // Fetch each session's full messages in parallel.
+        const fulls = await Promise.all(
+          summaries.map(s => getSession(s.id, userId).catch(() => null)),
+        )
+        if (cancelled) return
+        const loaded: ChatSession[] = fulls
+          .filter((s): s is NonNullable<typeof s> => Boolean(s))
+          .map(s => ({
+            id: s.id,
+            title: s.title,
+            createdAt: new Date(s.created_at),
+            messages: (s.messages as Message[]).map(m => ({
+              ...m,
+              timestamp: m.timestamp ? new Date(m.timestamp as unknown as string) : new Date(),
+            })),
+          }))
+        if (loaded.length > 0) {
+          setSessions([createSession(), ...loaded])
+          setActiveId(loaded[0].id)
+        }
+        setHistoryLoaded(true)
+      } catch (err) {
+        console.error("Failed to load chat history:", err)
+        setHistoryLoaded(true)
+      }
+    })()
+    return () => { cancelled = true }
+  }, [authStatus, userId, historyLoaded])
 
   const activeSession = sessions.find(s => s.id === activeId)
 
@@ -133,6 +185,16 @@ export function ChatLayout() {
         timestamp: new Date(),
       }
       updateSession(activeId, s => ({ ...s, messages: [...s.messages, assistantMsg] }))
+
+      // Persist to backend (best-effort — never blocks the UI)
+      if (userId) {
+        const finalMessages = [...activeSession.messages, userMsg, assistantMsg]
+        upsertSession(userId, {
+          id: activeId,
+          title: sessionTitle,
+          messages: finalMessages,
+        }).catch(err => console.error("Failed to save session:", err))
+      }
     } catch (err) {
       setCurrentNode(undefined)
       setStreamingAnswer("")
@@ -160,6 +222,27 @@ export function ChatLayout() {
     setSessions(prev => [session, ...prev])
     setActiveId(session.id)
     setInput("")
+  }
+
+  const handleDeleteSession = async (id: string) => {
+    // Optimistic UI: remove immediately, fire backend call in the background.
+    setSessions(prev => {
+      const filtered = prev.filter(s => s.id !== id)
+      if (filtered.length === 0) {
+        const fresh = createSession()
+        setActiveId(fresh.id)
+        return [fresh]
+      }
+      if (id === activeId) setActiveId(filtered[0].id)
+      return filtered
+    })
+    if (userId) {
+      try {
+        await deleteSession(id, userId)
+      } catch (err) {
+        console.error("Failed to delete session on server:", err)
+      }
+    }
   }
 
   const handleUpload = async (files: File[]) => {
@@ -198,6 +281,7 @@ export function ChatLayout() {
         activeSessionId={activeId}
         onNewChat={handleNewChat}
         onSelectSession={setActiveId}
+        onDeleteSession={handleDeleteSession}
         documents={documents}
         totalChunks={totalChunks}
         onUpload={handleUpload}

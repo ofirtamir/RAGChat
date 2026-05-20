@@ -8,7 +8,7 @@ import { ThemeToggle } from "@/components/theme-toggle"
 import { DocumentsDialog } from "@/components/documents-dialog"
 import { UserMenu } from "@/components/user-menu"
 import { DocumentInfo } from "@/types/chat"
-import { Plus, MessageSquare, Database, BookOpen } from "lucide-react"
+import { Plus, MessageSquare, Database, BookOpen, Trash2 } from "lucide-react"
 import { cn } from "@/lib/utils"
 
 interface SidebarProps {
@@ -16,6 +16,7 @@ interface SidebarProps {
   activeSessionId: string
   onNewChat: () => void
   onSelectSession: (id: string) => void
+  onDeleteSession?: (id: string) => void
   documents: DocumentInfo[]
   totalChunks: number
   onUpload: (files: File[]) => void
@@ -25,7 +26,7 @@ interface SidebarProps {
 }
 
 export function Sidebar({
-  sessions, activeSessionId, onNewChat, onSelectSession,
+  sessions, activeSessionId, onNewChat, onSelectSession, onDeleteSession,
   documents, totalChunks, onUpload, onClearDocuments, isUploading, uploadError,
 }: SidebarProps) {
   const [docsOpen, setDocsOpen] = useState(false)
@@ -62,19 +63,38 @@ export function Sidebar({
                 היסטוריה
               </p>
               {sessions.map(s => (
-                <button
+                <div
                   key={s.id}
-                  onClick={() => onSelectSession(s.id)}
                   className={cn(
-                    "w-full text-right px-3 py-2 rounded-lg text-sm flex items-center gap-2 transition-colors",
+                    "group flex items-center gap-1 rounded-lg pe-1 transition-colors",
                     s.id === activeSessionId
-                      ? "bg-accent text-accent-foreground font-medium"
+                      ? "bg-accent text-accent-foreground"
                       : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
                   )}
                 >
-                  <MessageSquare className="w-3.5 h-3.5 shrink-0" />
-                  <span className="truncate">{s.title}</span>
-                </button>
+                  <button
+                    onClick={() => onSelectSession(s.id)}
+                    className={cn(
+                      "flex-1 min-w-0 text-right px-3 py-2 text-sm flex items-center gap-2",
+                      s.id === activeSessionId && "font-medium"
+                    )}
+                  >
+                    <MessageSquare className="w-3.5 h-3.5 shrink-0" />
+                    <span className="truncate">{s.title}</span>
+                  </button>
+                  {onDeleteSession && (
+                    <button
+                      onClick={e => {
+                        e.stopPropagation()
+                        onDeleteSession(s.id)
+                      }}
+                      className="shrink-0 p-1 rounded opacity-0 group-hover:opacity-100 hover:bg-destructive/15 hover:text-destructive transition-all"
+                      aria-label="מחק שיחה"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
               ))}
             </div>
           )}

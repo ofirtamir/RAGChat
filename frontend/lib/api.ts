@@ -160,3 +160,56 @@ export async function clearDocuments(): Promise<void> {
   const res = await fetch(`${API_BASE}/documents`, { method: "DELETE" })
   if (!res.ok) throw new Error("Failed to clear documents")
 }
+
+// ── Chat session persistence ─────────────────────────────────────────────
+
+export interface SessionSummary {
+  id: string
+  title: string
+  created_at: string
+  updated_at: string
+}
+
+export interface StoredSession {
+  id: string
+  title: string
+  messages: unknown[]
+  created_at: string
+  updated_at: string
+}
+
+export async function listSessions(userId: string): Promise<SessionSummary[]> {
+  const res = await fetch(`${API_BASE}/sessions?user_id=${encodeURIComponent(userId)}`)
+  if (!res.ok) throw new Error("Failed to list sessions")
+  const data = await res.json()
+  return data.sessions ?? []
+}
+
+export async function getSession(sessionId: string, userId: string): Promise<StoredSession> {
+  const res = await fetch(
+    `${API_BASE}/sessions/${encodeURIComponent(sessionId)}?user_id=${encodeURIComponent(userId)}`,
+  )
+  if (!res.ok) throw new Error("Failed to fetch session")
+  return res.json()
+}
+
+export async function upsertSession(
+  userId: string,
+  session: { id: string; title: string; messages: unknown[] },
+): Promise<SessionSummary> {
+  const res = await fetch(`${API_BASE}/sessions/${encodeURIComponent(session.id)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...session, user_id: userId }),
+  })
+  if (!res.ok) throw new Error("Failed to save session")
+  return res.json()
+}
+
+export async function deleteSession(sessionId: string, userId: string): Promise<void> {
+  const res = await fetch(
+    `${API_BASE}/sessions/${encodeURIComponent(sessionId)}?user_id=${encodeURIComponent(userId)}`,
+    { method: "DELETE" },
+  )
+  if (!res.ok) throw new Error("Failed to delete session")
+}
