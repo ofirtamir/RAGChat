@@ -527,16 +527,24 @@ def run_rag_pipeline(
     user_id: str | None = None,
 ) -> dict:
     """Main entry point for the LangGraph RAG pipeline (non-streaming)."""
+    from src.observability import start_trace_span, flush_langfuse
+
     initial_state = _build_initial_state(query, chat_history)
     config, lf_handler = _build_config(session_id, user_id, query)
 
     try:
-        result = _rag_graph.invoke(initial_state, config=config)
+        # Wrap the whole pipeline in an explicit Langfuse span so user_id /
+        # session_id are attached to the parent trace (the LangChain
+        # callback alone does not propagate them up to the trace).
+        with start_trace_span(
+            name="rag-pipeline",
+            user_id=user_id,
+            session_id=session_id,
+            input_data={"query": query},
+        ):
+            result = _rag_graph.invoke(initial_state, config=config)
         return _build_result(result, query)
     finally:
-        # Flush Langfuse events immediately — avoids losing traces when the
-        # SDK's background batch worker hasn't fired yet.
-        from src.observability import flush_langfuse
         flush_langfuse()
 
 
@@ -628,6 +636,8 @@ def stream_rag_pipeline(
       {"type": "token",  "content": "..."}   ← individual LLM tokens
       {"type": "result", "data": { full result dict }}
     """
+    from src.observability import start_trace_span
+
     initial_state = _build_initial_state(query, chat_history, skip_generation=True)
     config, lf_handler = _build_config(session_id, user_id, query)
 
@@ -636,55 +646,60 @@ def stream_rag_pipeline(
     llm_node_name = None  # Track which node should generate the LLM response
 
     try:
-        for chunk in _rag_graph.stream(initial_state, config=config):
-            for node_name, state_update in chunk.items():
-                if isinstance(state_update, dict):
-                    final_state.update(state_update)
+        # Wrap everything in an explicit Langfuse span so user_id /
+        # session_id land on the parent trace, not just on child spans.
+        with start_trace_span(
+            name="rag-pipeline",
+            user_id=user_id,
+            session_id=session_id,
+            input_data={"query": query},
+        ):
+            for chunk in _rag_graph.stream(initial_state, config=config):
+                for node_name, state_update in chunk.items():
+                    if isinstance(state_update, dict):
+                        final_state.update(state_update)
 
-                # Skip step event for LLM nodes (we'll stream them manually)
-                if node_name in ("generator", "chitchat") and not final_state.get("answer"):
-                    llm_node_name = node_name
-                    continue
+                    # Skip step event for LLM nodes (we'll stream them manually)
+                    if node_name in ("generator", "chitchat") and not final_state.get("answer"):
+                        llm_node_name = node_name
+                        continue
 
-                meta = NODE_LABELS.get(node_name, {"label": node_name, "icon": "⚙️"})
-                detail = _get_step_detail(node_name, final_state)
-                yield {
-                    "type": "step",
-                    "node": node_name,
-                    "label": meta["label"],
-                    "icon": meta["icon"],
-                    "detail": detail,
-                }
+                    meta = NODE_LABELS.get(node_name, {"label": node_name, "icon": "⚙️"})
+                    detail = _get_step_detail(node_name, final_state)
+                    yield {
+                        "type": "step",
+                        "node": node_name,
+                        "label": meta["label"],
+                        "icon": meta["icon"],
+                        "detail": detail,
+                    }
 
-        # If answer was already set (e.g., check_documents "no docs" message), just return
-        if final_state.get("answer"):
+            # If answer was already set (e.g., check_documents "no docs" message)
+            if final_state.get("answer"):
+                yield {"type": "result", "data": _build_result(final_state, query)}
+                return
+
+            # Emit the generator/chitchat step event
+            target_node = llm_node_name or "generator"
+            gen_meta = NODE_LABELS.get(target_node, {"label": "מייצר תשובה", "icon": "⚡"})
+            yield {
+                "type": "step",
+                "node": target_node,
+                "label": gen_meta["label"],
+                "icon": gen_meta["icon"],
+                "detail": "",
+            }
+
+            # Build the LLM chain and stream tokens.
+            chain, inputs = _build_llm_chain(final_state, target_node)
+
+            full_answer = ""
+            for token_chunk in chain.stream(inputs, config=config):
+                full_answer += token_chunk
+                yield {"type": "token", "content": token_chunk}
+
+            final_state["answer"] = full_answer
             yield {"type": "result", "data": _build_result(final_state, query)}
-            return
-
-        # Emit the generator/chitchat step event
-        target_node = llm_node_name or "generator"
-        gen_meta = NODE_LABELS.get(target_node, {"label": "מייצר תשובה", "icon": "⚡"})
-        yield {
-            "type": "step",
-            "node": target_node,
-            "label": gen_meta["label"],
-            "icon": gen_meta["icon"],
-            "detail": "",
-        }
-
-        # Build the LLM chain and stream tokens.
-        # NOTE: we intentionally do NOT pass the Langfuse config here —
-        # the graph trace already captured all pipeline nodes, and passing
-        # the callback again would create a duplicate trace.
-        chain, inputs = _build_llm_chain(final_state, target_node)
-
-        full_answer = ""
-        for token_chunk in chain.stream(inputs):
-            full_answer += token_chunk
-            yield {"type": "token", "content": token_chunk}
-
-        final_state["answer"] = full_answer
-        yield {"type": "result", "data": _build_result(final_state, query)}
 
     finally:
         # Flush Langfuse immediately so batched spans aren't lost when the

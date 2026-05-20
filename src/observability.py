@@ -70,6 +70,48 @@ def flush_langfuse() -> None:
         pass
 
 
+from contextlib import contextmanager
+
+
+@contextmanager
+def start_trace_span(
+    name: str,
+    user_id: str | None = None,
+    session_id: str | None = None,
+    input_data: dict | None = None,
+):
+    """
+    Open an explicit Langfuse parent span and attach user/session metadata to
+    its trace.  All LangChain callback spans nested inside this context become
+    children of the span and inherit its trace — so the trace shows up in
+    Langfuse with user_id / session_id properly attributed.
+
+    Works around the v3 LangChain integration bug where langfuse_user_id /
+    langfuse_session_id in run metadata never reach the parent trace.
+    See https://github.com/orgs/langfuse/discussions/8493
+    """
+    if not is_langfuse_enabled():
+        yield None
+        return
+
+    try:
+        from langfuse import Langfuse
+        client = Langfuse()
+        with client.start_as_current_span(name=name, input=input_data or {}) as span:
+            try:
+                span.update_trace(
+                    user_id=user_id,
+                    session_id=session_id,
+                    name=name,
+                )
+            except Exception as e:
+                logger.warning("Failed to update_trace: %s", e)
+            yield span
+    except Exception as e:
+        logger.warning("Failed to start Langfuse trace span: %s", e)
+        yield None
+
+
 def get_langfuse_handler(
     session_id: str | None = None,
     user_id: str | None = None,
