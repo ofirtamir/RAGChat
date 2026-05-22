@@ -31,5 +31,6 @@ RUN mkdir -p data/chroma_db uploads
 EXPOSE 8000
 
 # Railway injects $PORT; fall back to 8000 for local docker run
-# --timeout-keep-alive 120 keeps SSE connections alive for long LLM responses
-CMD ["sh", "-c", "uvicorn backend.api:app --host 0.0.0.0 --port ${PORT:-8000} --timeout-keep-alive 120"]
+# --timeout-keep-alive 650 keeps SSE connections alive for long LLM responses
+# (must exceed the LLM generation timeout so long answers aren't cut off)
+CMD ["sh", "-c", "uvicorn backend.api:app --host 0.0.0.0 --port ${PORT:-8000} --timeout-keep-alive 650"]

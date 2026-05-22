@@ -36,7 +36,10 @@ LLM_MAX_OUTPUT_TOKENS = int(os.getenv("LLM_MAX_OUTPUT_TOKENS", "65536"))
 # that return small JSON responses. Long timeout for generation nodes
 # (Generator, Chitchat) that may produce thousands of tokens.
 LLM_TIMEOUT_SHORT = int(os.getenv("LLM_TIMEOUT_SHORT", "30"))    # seconds
-LLM_TIMEOUT_LONG = int(os.getenv("LLM_TIMEOUT_LONG", "120"))     # seconds
+# Long timeout for generation: detailed Hebrew answers (with tables, citations,
+# full-document synthesis) can stream for several minutes. A short timeout here
+# causes the Gemini client to abort mid-stream, cutting the answer off.
+LLM_TIMEOUT_LONG = int(os.getenv("LLM_TIMEOUT_LONG", "600"))     # seconds
 LLM_MAX_RETRIES = int(os.getenv("LLM_MAX_RETRIES", "2"))
 
 # Embedding settings

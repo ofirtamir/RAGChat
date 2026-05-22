@@ -717,9 +717,19 @@ def stream_rag_pipeline(
             chain, inputs = _build_llm_chain(final_state, target_node)
 
             full_answer = ""
-            for token_chunk in chain.stream(inputs, config=config):
-                full_answer += token_chunk
-                yield {"type": "token", "content": token_chunk}
+            try:
+                for token_chunk in chain.stream(inputs, config=config):
+                    full_answer += token_chunk
+                    yield {"type": "token", "content": token_chunk}
+            except Exception:
+                # If the stream is cut mid-generation (e.g. an LLM timeout),
+                # keep whatever was produced rather than discarding it and
+                # surfacing only an error. The user still gets the partial
+                # answer, with a clear note that it was truncated.
+                if full_answer:
+                    full_answer += "\n\n⚠️ _התשובה נקטעה לפני שהושלמה. נסה לשאול שוב או לצמצם את השאלה._"
+                else:
+                    raise
 
             final_state["answer"] = full_answer
             yield {"type": "result", "data": _build_result(final_state, query)}
