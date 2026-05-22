@@ -48,6 +48,7 @@ CHUNK_OVERLAP = 200
 
 # Retriever settings
 RETRIEVER_K = 10
+RETRIEVER_CANDIDATES = 20  # Fetch more candidates for reranking
 
 # ChromaDB
 CHROMA_COLLECTION_NAME = "ragchat_documents"
