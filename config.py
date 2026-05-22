@@ -31,6 +31,14 @@ LLM_MODEL = os.getenv("LLM_MODEL", "gemini-3.5-flash")
 LLM_TEMPERATURE = 0.3
 LLM_MAX_OUTPUT_TOKENS = int(os.getenv("LLM_MAX_OUTPUT_TOKENS", "8192"))
 
+# LLM reliability settings
+# Short timeout for decision nodes (Router, Rewriter, Planner, FullDocDetector)
+# that return small JSON responses. Long timeout for generation nodes
+# (Generator, Chitchat) that may produce thousands of tokens.
+LLM_TIMEOUT_SHORT = int(os.getenv("LLM_TIMEOUT_SHORT", "30"))    # seconds
+LLM_TIMEOUT_LONG = int(os.getenv("LLM_TIMEOUT_LONG", "120"))     # seconds
+LLM_MAX_RETRIES = int(os.getenv("LLM_MAX_RETRIES", "2"))
+
 # Embedding settings
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "models/gemini-embedding-001")
 

@@ -8,7 +8,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import JsonOutputParser
 from pydantic import BaseModel, Field
 
-from config import GOOGLE_API_KEY, LLM_MODEL
+from config import GOOGLE_API_KEY, LLM_MODEL, LLM_TIMEOUT_SHORT, LLM_MAX_RETRIES
 
 
 class RewrittenQuery(BaseModel):
@@ -56,6 +56,8 @@ def _get_rewriter_llm() -> ChatGoogleGenerativeAI:
         model=LLM_MODEL,
         google_api_key=GOOGLE_API_KEY,
         temperature=0,
+        timeout=LLM_TIMEOUT_SHORT,
+        max_retries=LLM_MAX_RETRIES,
     )
 
 

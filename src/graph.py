@@ -22,7 +22,10 @@ from src.full_doc_detector import detect_full_document_need, create_fallback_ful
 from src.planner import create_query_plan, create_fallback_plan, QueryPlan
 from src.retriever import retrieve_for_query
 from src.vector_store import get_document_count, list_document_sources, get_all_chunks_for_source
-from config import GOOGLE_API_KEY, LLM_MODEL, LLM_TEMPERATURE, LLM_MAX_OUTPUT_TOKENS
+from config import (
+    GOOGLE_API_KEY, LLM_MODEL, LLM_TEMPERATURE, LLM_MAX_OUTPUT_TOKENS,
+    LLM_TIMEOUT_LONG, LLM_MAX_RETRIES,
+)
 
 
 # ──────────────────────────────────────────────
@@ -53,6 +56,8 @@ def _get_llm() -> ChatGoogleGenerativeAI:
         google_api_key=GOOGLE_API_KEY,
         temperature=LLM_TEMPERATURE,
         max_output_tokens=LLM_MAX_OUTPUT_TOKENS,
+        timeout=LLM_TIMEOUT_LONG,
+        max_retries=LLM_MAX_RETRIES,
     )
 
 
@@ -140,15 +145,21 @@ def chitchat_node(state: GraphState) -> dict:
     if state.get("skip_generation"):
         return result
 
-    llm = _get_llm()
-    prompt = ChatPromptTemplate.from_messages([
-        ("system", CHITCHAT_SYSTEM_PROMPT),
-        MessagesPlaceholder("chat_history"),
-        ("human", "{query}"),
-    ])
-    chain = prompt | llm | StrOutputParser()
-    history = _build_history_messages(state.get("chat_history", []))
-    result["answer"] = chain.invoke({"query": state["query"], "chat_history": history})
+    try:
+        llm = _get_llm()
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", CHITCHAT_SYSTEM_PROMPT),
+            MessagesPlaceholder("chat_history"),
+            ("human", "{query}"),
+        ])
+        chain = prompt | llm | StrOutputParser()
+        history = _build_history_messages(state.get("chat_history", []))
+        result["answer"] = chain.invoke({"query": state["query"], "chat_history": history})
+    except Exception:
+        result["answer"] = (
+            "⚠️ מצטער, לא הצלחתי לייצר תשובה כרגע. "
+            "ייתכן שיש עומס על השרת — נסה שוב בעוד כמה שניות."
+        )
     return result
 
 
@@ -322,52 +333,59 @@ def generator_node(state: GraphState) -> dict:
         and full_doc_decision.target_sources
     )
 
-    if is_full_doc:
-        context_parts = []
-        for source in full_doc_decision.target_sources:
-            source_docs = [d for d in docs if d.metadata.get("source") == source]
-            context_parts.append(
-                f"=== Document: {source} ===\n{_format_docs(source_docs)}"
-            )
-        context = "\n\n".join(context_parts)
+    try:
+        if is_full_doc:
+            context_parts = []
+            for source in full_doc_decision.target_sources:
+                source_docs = [d for d in docs if d.metadata.get("source") == source]
+                context_parts.append(
+                    f"=== Document: {source} ===\n{_format_docs(source_docs)}"
+                )
+            context = "\n\n".join(context_parts)
 
-        prompt = ChatPromptTemplate.from_messages([
-            ("system", FULL_DOC_SYSTEM_PROMPT),
-            MessagesPlaceholder("chat_history"),
-            ("human", "{query}"),
-        ])
-        chain = prompt | llm | StrOutputParser()
-        answer = chain.invoke({"context": context, "query": query, "chat_history": history})
+            prompt = ChatPromptTemplate.from_messages([
+                ("system", FULL_DOC_SYSTEM_PROMPT),
+                MessagesPlaceholder("chat_history"),
+                ("human", "{query}"),
+            ])
+            chain = prompt | llm | StrOutputParser()
+            answer = chain.invoke({"context": context, "query": query, "chat_history": history})
 
-    elif not plan.is_complex:
-        context = _format_docs(docs)
+        elif not plan.is_complex:
+            context = _format_docs(docs)
 
-        prompt = ChatPromptTemplate.from_messages([
-            ("system", ANSWER_SYSTEM_PROMPT),
-            MessagesPlaceholder("chat_history"),
-            ("human", "{query}"),
-        ])
-        chain = prompt | llm | StrOutputParser()
-        answer = chain.invoke({"context": context, "query": query, "chat_history": history})
+            prompt = ChatPromptTemplate.from_messages([
+                ("system", ANSWER_SYSTEM_PROMPT),
+                MessagesPlaceholder("chat_history"),
+                ("human", "{query}"),
+            ])
+            chain = prompt | llm | StrOutputParser()
+            answer = chain.invoke({"context": context, "query": query, "chat_history": history})
 
-    else:
-        sub_results = []
-        chunk_start = 0
-        for sq in plan.sub_queries:
-            chunk_end = chunk_start + 5
-            sq_docs = docs[chunk_start:chunk_end]
-            sub_results.append(f"Sub-query: {sq}\nRetrieved context:\n{_format_docs(sq_docs)}")
-            chunk_start = chunk_end
+        else:
+            sub_results = []
+            chunk_start = 0
+            for sq in plan.sub_queries:
+                chunk_end = chunk_start + 5
+                sq_docs = docs[chunk_start:chunk_end]
+                sub_results.append(f"Sub-query: {sq}\nRetrieved context:\n{_format_docs(sq_docs)}")
+                chunk_start = chunk_end
 
-        combined = "\n\n===\n\n".join(sub_results)
+            combined = "\n\n===\n\n".join(sub_results)
 
-        prompt = ChatPromptTemplate.from_messages([
-            ("system", SYNTHESIS_SYSTEM_PROMPT),
-            MessagesPlaceholder("chat_history"),
-            ("human", "{query}"),
-        ])
-        chain = prompt | llm | StrOutputParser()
-        answer = chain.invoke({"sub_query_results": combined, "query": query, "chat_history": history})
+            prompt = ChatPromptTemplate.from_messages([
+                ("system", SYNTHESIS_SYSTEM_PROMPT),
+                MessagesPlaceholder("chat_history"),
+                ("human", "{query}"),
+            ])
+            chain = prompt | llm | StrOutputParser()
+            answer = chain.invoke({"sub_query_results": combined, "query": query, "chat_history": history})
+
+    except Exception:
+        answer = (
+            "⚠️ מצטער, לא הצלחתי לייצר תשובה כרגע. "
+            "ייתכן שיש עומס על השרת — נסה שוב בעוד כמה שניות."
+        )
 
     return {"answer": answer}
 

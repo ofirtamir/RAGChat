@@ -6,7 +6,10 @@ from langchain_core.documents import Document
 from src.planner import create_query_plan, create_fallback_plan, QueryPlan
 from src.retriever import retrieve_for_query
 from src.vector_store import get_document_count
-from config import GOOGLE_API_KEY, LLM_MODEL, LLM_TEMPERATURE, LLM_MAX_OUTPUT_TOKENS
+from config import (
+    GOOGLE_API_KEY, LLM_MODEL, LLM_TEMPERATURE, LLM_MAX_OUTPUT_TOKENS,
+    LLM_TIMEOUT_LONG, LLM_MAX_RETRIES,
+)
 
 
 ANSWER_SYSTEM_PROMPT = """You are a helpful assistant that answers questions based on the provided context.
@@ -30,6 +33,8 @@ def _get_llm() -> ChatGoogleGenerativeAI:
         google_api_key=GOOGLE_API_KEY,
         temperature=LLM_TEMPERATURE,
         max_output_tokens=LLM_MAX_OUTPUT_TOKENS,
+        timeout=LLM_TIMEOUT_LONG,
+        max_retries=LLM_MAX_RETRIES,
     )
 
 
@@ -122,13 +127,20 @@ def run_rag_pipeline(query: str) -> dict:
         plan = create_fallback_plan(query)
 
     # Step 2: Retrieve and Generate
-    if not plan.is_complex:
-        docs = retrieve_for_query(plan.sub_queries[0])
-        answer = _answer_simple_query(query, docs)
-        sources = _extract_sources(docs)
-    else:
-        answer, all_docs = _answer_complex_query(query, plan)
-        sources = _extract_sources(all_docs)
+    try:
+        if not plan.is_complex:
+            docs = retrieve_for_query(plan.sub_queries[0])
+            answer = _answer_simple_query(query, docs)
+            sources = _extract_sources(docs)
+        else:
+            answer, all_docs = _answer_complex_query(query, plan)
+            sources = _extract_sources(all_docs)
+    except Exception:
+        answer = (
+            "⚠️ מצטער, לא הצלחתי לייצר תשובה כרגע. "
+            "ייתכן שיש עומס על השרת — נסה שוב בעוד כמה שניות."
+        )
+        sources = []
 
     return {
         "answer": answer,

@@ -9,7 +9,7 @@ from langchain_core.output_parsers import JsonOutputParser
 from langchain_core.messages import HumanMessage, AIMessage
 from pydantic import BaseModel, Field
 
-from config import GOOGLE_API_KEY, LLM_MODEL
+from config import GOOGLE_API_KEY, LLM_MODEL, LLM_TIMEOUT_SHORT, LLM_MAX_RETRIES
 
 
 class RouteDecision(BaseModel):
@@ -61,6 +61,8 @@ def _get_router_llm() -> ChatGoogleGenerativeAI:
         model=LLM_MODEL,
         google_api_key=GOOGLE_API_KEY,
         temperature=0,
+        timeout=LLM_TIMEOUT_SHORT,
+        max_retries=LLM_MAX_RETRIES,
     )
 
 
