@@ -15,23 +15,27 @@ interface MessageBubbleProps {
   message: Message
 }
 
-// Replace [1], [2], [3, 4, 5] … with <cite title="…" data-snippet="…">n</cite>
-// so ReactMarkdown's custom "cite" component can render a hoverable badge.
-// We deliberately skip replacement inside fenced code blocks (```…```) and
-// inline code spans (`…`) to avoid mangling code samples.
+function escapeHtmlAttr(str: string): string {
+  return str
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;")
+    .replace(/\n/g, " ")
+}
+
 function injectCitations(content: string, citations?: CitationDetail[]): string {
-  // Split on code fences / inline code, only process non-code segments.
   const parts = content.split(/(```[\s\S]*?```|`[^`]+`)/g)
   return parts
     .map((part, i) => {
-      if (i % 2 === 1) return part // code segment – leave as-is
-      // Match [1], [2, 3], [3, 4, 5] etc.
+      if (i % 2 === 1) return part
       return part.replace(/\[(\d+(?:\s*,\s*\d+)*)\]/g, (_, nums) => {
         return nums.split(/\s*,\s*/).map((num: string) => {
           const idx = parseInt(num, 10) - 1
           const cite = citations?.[idx]
-          const src = (cite?.source ?? `מקור ${num}`).replace(/"/g, "&quot;")
-          const snippet = (cite?.snippet ?? "").replace(/"/g, "&quot;")
+          const src = escapeHtmlAttr(cite?.source ?? `מקור ${num}`)
+          const snippet = escapeHtmlAttr(cite?.snippet ?? "")
           return `<cite title="${src}" data-snippet="${snippet}">${num}</cite>`
         }).join("")
       })
