@@ -23,8 +23,49 @@ import {
 import { Send, Sparkles } from "lucide-react"
 import { cn } from "@/lib/utils"
 
+const LOCAL_STORAGE_KEY = "ragchat_sessions"
+const LOCAL_STORAGE_ACTIVE_KEY = "ragchat_active_session"
+
 function createSession(): ChatSession {
   return { id: uuidv4(), title: "שיחה חדשה", messages: [], createdAt: new Date() }
+}
+
+function saveSessionsToLocalStorage(sessions: ChatSession[], activeId: string) {
+  try {
+    const toSave = sessions.filter(s => s.messages.length > 0)
+    if (toSave.length === 0) return
+    const serializable = toSave.map(s => ({
+      ...s,
+      createdAt: s.createdAt.toISOString(),
+      messages: s.messages.map(m => ({
+        ...m,
+        timestamp: m.timestamp instanceof Date ? m.timestamp.toISOString() : m.timestamp,
+      })),
+    }))
+    localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(serializable))
+    localStorage.setItem(LOCAL_STORAGE_ACTIVE_KEY, activeId)
+  } catch {}
+}
+
+function loadSessionsFromLocalStorage(): { sessions: ChatSession[]; activeId: string } | null {
+  try {
+    const raw = localStorage.getItem(LOCAL_STORAGE_KEY)
+    if (!raw) return null
+    const parsed = JSON.parse(raw) as Array<Record<string, unknown>>
+    const sessions: ChatSession[] = parsed.map((s: Record<string, unknown>) => ({
+      id: s.id as string,
+      title: s.title as string,
+      createdAt: new Date(s.createdAt as string),
+      messages: (s.messages as Array<Record<string, unknown>>).map((m: Record<string, unknown>) => ({
+        ...m,
+        timestamp: new Date(m.timestamp as string),
+      })) as Message[],
+    }))
+    const activeId = localStorage.getItem(LOCAL_STORAGE_ACTIVE_KEY) || ""
+    return sessions.length > 0 ? { sessions, activeId } : null
+  } catch {
+    return null
+  }
 }
 
 export function ChatLayout() {
@@ -33,6 +74,7 @@ export function ChatLayout() {
   const [sessions, setSessions] = useState<ChatSession[]>(() => [createSession()])
   const [activeId, setActiveId] = useState<string>(() => "")
   const [historyLoaded, setHistoryLoaded] = useState(false)
+  const [localLoaded, setLocalLoaded] = useState(false)
   const [input, setInput] = useState("")
   const [isLoading, setIsLoading] = useState(false)
   const [documents, setDocuments] = useState<DocumentInfo[]>([])
@@ -51,6 +93,24 @@ export function ChatLayout() {
   useEffect(() => {
     if (sessions.length > 0 && !activeId) setActiveId(sessions[0].id)
   }, [sessions, activeId])
+
+  // Load sessions from localStorage on mount (client-only, runs once)
+  useEffect(() => {
+    const cached = loadSessionsFromLocalStorage()
+    if (cached && cached.sessions.some(s => s.messages.length > 0)) {
+      setSessions([createSession(), ...cached.sessions])
+      setActiveId(cached.activeId)
+    }
+    setLocalLoaded(true)
+  }, [])
+
+  // Persist sessions to localStorage on every change
+  useEffect(() => {
+    if (!localLoaded) return
+    if (sessions.length > 0 && activeId) {
+      saveSessionsToLocalStorage(sessions, activeId)
+    }
+  }, [sessions, activeId, localLoaded])
 
   // Load persisted history when the user signs in
   useEffect(() => {
