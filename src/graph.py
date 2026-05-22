@@ -1,9 +1,8 @@
 """
 LangGraph RAG pipeline with:
 - Router: chitchat vs. retrieval
-- Query Rewriter: optimizes queries for vector search
+- Query Rewriter: optimizes queries for vector search + query decomposition
 - Full Doc Detector: detects if entire document is needed
-- Planner: simple vs. complex query decomposition
 - Retriever: chunk-based OR full-document retrieval
 - Generator: answer generation with conversation history
 """
@@ -19,7 +18,7 @@ from langgraph.graph import StateGraph, END
 from src.router import route_query, RouteDecision
 from src.query_rewriter import rewrite_query, create_fallback_rewrite, RewrittenQuery
 from src.full_doc_detector import detect_full_document_need, create_fallback_full_doc_decision, FullDocDecision
-from src.planner import create_query_plan, create_fallback_plan, QueryPlan
+from src.planner import create_fallback_plan, QueryPlan
 from src.retriever import retrieve_for_query
 from src.vector_store import get_document_count, list_document_sources, get_all_chunks_for_source
 from config import (
@@ -240,38 +239,25 @@ def full_doc_retriever_node(state: GraphState) -> dict:
 
 
 # ──────────────────────────────────────────────
-# Node: Planner
-# ──────────────────────────────────────────────
-
-def planner_node(state: GraphState) -> dict:
-    rewritten = state.get("rewritten")
-
-    if rewritten and len(rewritten.rewritten_queries) > 1:
-        return {
-            "plan": QueryPlan(
-                is_complex=True,
-                sub_queries=rewritten.rewritten_queries,
-                reasoning=f"Query rewriter decomposed into {len(rewritten.rewritten_queries)} search queries.",
-            )
-        }
-
-    search_query = rewritten.rewritten_queries[0] if rewritten else state["query"]
-    try:
-        plan = create_query_plan(search_query)
-    except Exception:
-        plan = create_fallback_plan(search_query)
-    return {"plan": plan}
-
-
-# ──────────────────────────────────────────────
 # Node: Retriever (chunk-based)
 # ──────────────────────────────────────────────
 
 def retriever_node(state: GraphState) -> dict:
-    plan = state["plan"]
-    all_docs = []
+    """Retrieve documents using rewritten queries.
+    Also builds a QueryPlan from the rewriter output (no LLM call)."""
+    rewritten = state.get("rewritten")
+    queries = rewritten.rewritten_queries if rewritten else [state["query"]]
 
-    for sq in plan.sub_queries:
+    # Build plan deterministically from rewriter output
+    is_complex = len(queries) > 1
+    plan = QueryPlan(
+        is_complex=is_complex,
+        sub_queries=queries,
+        reasoning=f"{'פירוק מהשכתוב' if is_complex else 'שאילתה ישירה'}: {len(queries)} שאילתות חיפוש.",
+    )
+
+    all_docs = []
+    for sq in queries:
         docs = retrieve_for_query(sq)
         all_docs.extend(docs)
 
@@ -283,6 +269,7 @@ def retriever_node(state: GraphState) -> dict:
             unique_docs.append(doc)
 
     return {
+        "plan": plan,
         "documents": unique_docs,
         "sources": _extract_sources(unique_docs),
     }
@@ -411,7 +398,7 @@ def route_after_full_doc_detector(state: GraphState) -> str:
     decision = state.get("full_doc_decision")
     if decision and decision.needs_full_document and decision.target_sources:
         return "full_doc_retriever"
-    return "planner"
+    return "retriever"
 
 
 # ──────────────────────────────────────────────
@@ -427,7 +414,6 @@ def build_rag_graph() -> StateGraph:
     workflow.add_node("rewriter", rewriter_node)
     workflow.add_node("full_doc_detector", full_doc_detector_node)
     workflow.add_node("full_doc_retriever", full_doc_retriever_node)
-    workflow.add_node("planner", planner_node)
     workflow.add_node("retriever", retriever_node)
     workflow.add_node("generator", generator_node)
 
@@ -447,20 +433,19 @@ def build_rag_graph() -> StateGraph:
         {"rewriter": "rewriter", END: END},
     )
 
-    # rewriter → full_doc_detector → full_doc_retriever OR planner
+    # rewriter → full_doc_detector → full_doc_retriever OR retriever
     workflow.add_edge("rewriter", "full_doc_detector")
 
     workflow.add_conditional_edges(
         "full_doc_detector",
         route_after_full_doc_detector,
-        {"full_doc_retriever": "full_doc_retriever", "planner": "planner"},
+        {"full_doc_retriever": "full_doc_retriever", "retriever": "retriever"},
     )
 
-    # full_doc_retriever → generator (skip planner/retriever)
+    # full_doc_retriever → generator (skip retriever)
     workflow.add_edge("full_doc_retriever", "generator")
 
-    # planner → retriever → generator
-    workflow.add_edge("planner", "retriever")
+    # retriever → generator
     workflow.add_edge("retriever", "generator")
     workflow.add_edge("generator", END)
 
@@ -484,7 +469,6 @@ NODE_LABELS = {
     "rewriter":          {"label": "משכתב את השאילתה לחיפוש",  "icon": "✏️"},
     "full_doc_detector": {"label": "בודק אם נדרש מסמך מלא",   "icon": "🔍"},
     "full_doc_retriever":{"label": "מאחזר מסמך מלא",           "icon": "📄"},
-    "planner":           {"label": "מתכנן אסטרטגיית חיפוש",   "icon": "📐"},
     "retriever":         {"label": "מחפש מידע רלוונטי",        "icon": "🗂️"},
     "generator":         {"label": "מייצר תשובה",              "icon": "⚡"},
 }
@@ -743,10 +727,6 @@ def _get_step_detail(node_name: str, state: dict) -> str:
                 if fd.needs_full_document:
                     return f"מסמכים: {', '.join(fd.target_sources[:2])}"
                 return "אחזור חלקי (chunks)"
-        elif node_name == "planner":
-            plan = state.get("plan")
-            if plan:
-                return f"{'שאילתה מורכבת' if plan.is_complex else 'שאילתה פשוטה'} ({len(plan.sub_queries)} תת-שאילתות)"
         elif node_name == "retriever":
             docs = state.get("documents", [])
             return f"נמצאו {len(docs)} קטעים רלוונטיים"
