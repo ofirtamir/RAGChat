@@ -155,8 +155,18 @@ async def chat_stream(request: ChatRequest):
         )
 
         while True:
-            # Poll the queue from the async context
-            event = await loop.run_in_executor(None, lambda: q.get(timeout=120))
+            # Poll the queue from the async context.
+            # Use a long timeout: time-to-first-token can be slow for
+            # large full-document prompts sent to the LLM.
+            try:
+                event = await loop.run_in_executor(None, lambda: q.get(timeout=300))
+            except Empty:
+                error_payload = json.dumps(
+                    {"error": "Pipeline timed out waiting for response"},
+                    ensure_ascii=False,
+                )
+                yield f"event: error\ndata: {error_payload}\n\n"
+                break
 
             if event is None:
                 # Stream finished
