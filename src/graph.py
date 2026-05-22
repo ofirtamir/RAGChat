@@ -267,6 +267,8 @@ def retriever_node(state: GraphState) -> dict:
     all_docs = []
     for sq in queries:
         docs = retrieve_for_query(sq)
+        for doc in docs:
+            doc.metadata["_sub_query"] = sq
         all_docs.extend(docs)
 
     seen = set()
@@ -378,12 +380,9 @@ def generator_node(state: GraphState) -> dict:
 
         else:
             sub_results = []
-            chunk_start = 0
             for sq in plan.sub_queries:
-                chunk_end = chunk_start + 5
-                sq_docs = docs[chunk_start:chunk_end]
+                sq_docs = [d for d in docs if d.metadata.get("_sub_query") == sq]
                 sub_results.append(f"Sub-query: {sq}\nRetrieved context:\n{_format_docs(sq_docs)}")
-                chunk_start = chunk_end
 
             combined = "\n\n===\n\n".join(sub_results)
 
@@ -634,12 +633,9 @@ def _build_llm_chain(state: dict, node_name: str):
 
     else:
         sub_results = []
-        chunk_start = 0
         for sq in plan.sub_queries:
-            chunk_end = chunk_start + 5
-            sq_docs = docs[chunk_start:chunk_end]
+            sq_docs = [d for d in docs if d.metadata.get("_sub_query") == sq]
             sub_results.append(f"Sub-query: {sq}\nRetrieved context:\n{_format_docs(sq_docs)}")
-            chunk_start = chunk_end
         combined = "\n\n===\n\n".join(sub_results)
         prompt = ChatPromptTemplate.from_messages([
             ("system", SYNTHESIS_SYSTEM_PROMPT),
