@@ -94,22 +94,30 @@ def start_trace_span(
         yield None
         return
 
+    span = None
     try:
         from langfuse import Langfuse
         client = Langfuse()
-        with client.start_as_current_span(name=name, input=input_data or {}) as span:
-            try:
-                span.update_trace(
-                    user_id=user_id,
-                    session_id=session_id,
-                    name=name,
-                )
-            except Exception as e:
-                logger.warning("Failed to update_trace: %s", e)
-            yield span
+        span = client.start_as_current_span(name=name, input=input_data or {}).__enter__()
+        try:
+            span.update_trace(
+                user_id=user_id,
+                session_id=session_id,
+                name=name,
+            )
+        except Exception as e:
+            logger.warning("Failed to update_trace: %s", e)
     except Exception as e:
         logger.warning("Failed to start Langfuse trace span: %s", e)
-        yield None
+
+    try:
+        yield span
+    finally:
+        if span is not None:
+            try:
+                span.__exit__(None, None, None)
+            except Exception:
+                pass
 
 
 def get_langfuse_handler(
