@@ -33,7 +33,12 @@ function createSession(): ChatSession {
 function saveSessionsToLocalStorage(sessions: ChatSession[], activeId: string) {
   try {
     const toSave = sessions.filter(s => s.messages.length > 0)
-    if (toSave.length === 0) return
+    if (toSave.length === 0) {
+      // Clear localStorage when no sessions have messages (e.g. all deleted)
+      localStorage.removeItem(LOCAL_STORAGE_KEY)
+      localStorage.removeItem(LOCAL_STORAGE_ACTIVE_KEY)
+      return
+    }
     const serializable = toSave.map(s => ({
       ...s,
       createdAt: s.createdAt.toISOString(),
@@ -98,8 +103,13 @@ export function ChatLayout() {
   useEffect(() => {
     const cached = loadSessionsFromLocalStorage()
     if (cached && cached.sessions.some(s => s.messages.length > 0)) {
-      setSessions([createSession(), ...cached.sessions])
-      setActiveId(cached.activeId)
+      const restoredSessions = [createSession(), ...cached.sessions]
+      setSessions(restoredSessions)
+      // Ensure activeId points to a session that actually exists in the restored list
+      const validId = restoredSessions.find(s => s.id === cached.activeId)
+        ? cached.activeId
+        : cached.sessions[0]?.id ?? restoredSessions[0].id
+      setActiveId(validId)
     }
     setLocalLoaded(true)
   }, [])
@@ -107,8 +117,15 @@ export function ChatLayout() {
   // Persist sessions to localStorage on every change
   useEffect(() => {
     if (!localLoaded) return
-    if (sessions.length > 0 && activeId) {
-      saveSessionsToLocalStorage(sessions, activeId)
+    if (sessions.length > 0) {
+      // Save activeId only if it points to a session with messages,
+      // otherwise save the first session with messages (so reload picks a valid session).
+      const sessionsWithMessages = sessions.filter(s => s.messages.length > 0)
+      const validActiveId =
+        sessionsWithMessages.find(s => s.id === activeId)?.id ??
+        sessionsWithMessages[0]?.id ??
+        activeId
+      saveSessionsToLocalStorage(sessions, validActiveId)
     }
   }, [sessions, activeId, localLoaded])
 
