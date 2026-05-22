@@ -8,8 +8,8 @@ def get_retriever():
     """Return a retriever that performs similarity search."""
     vs = get_vector_store()
     return vs.as_retriever(
-        search_type="similarity",
-        search_kwargs={"k": RETRIEVER_K},
+        search_type="mmr",
+        search_kwargs={"k": RETRIEVER_K, "fetch_k": RETRIEVER_K * 3},
     )
 
 

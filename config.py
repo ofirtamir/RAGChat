@@ -47,7 +47,7 @@ CHUNK_SIZE = 1000
 CHUNK_OVERLAP = 200
 
 # Retriever settings
-RETRIEVER_K = 5
+RETRIEVER_K = 10
 
 # ChromaDB
 CHROMA_COLLECTION_NAME = "ragchat_documents"
