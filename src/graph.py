@@ -1,7 +1,6 @@
 """
 LangGraph RAG pipeline with:
-- Router: chitchat vs. retrieval
-- Query Rewriter: optimizes queries for vector search + query decomposition
+- Query Analyzer: routing + query rewriting in a single LLM call
 - Full Doc Detector: detects if entire document is needed
 - Retriever: chunk-based OR full-document retrieval
 - Generator: answer generation with conversation history
@@ -15,8 +14,9 @@ from langchain_core.documents import Document
 from langchain_core.messages import HumanMessage, AIMessage
 from langgraph.graph import StateGraph, END
 
-from src.router import route_query, RouteDecision
-from src.query_rewriter import rewrite_query, create_fallback_rewrite, RewrittenQuery
+from src.router import RouteDecision
+from src.query_rewriter import create_fallback_rewrite, RewrittenQuery
+from src.query_analyzer import analyze_query, QueryAnalysis
 from src.full_doc_detector import detect_full_document_need, create_fallback_full_doc_decision, FullDocDecision
 from src.planner import create_fallback_plan, QueryPlan
 from src.retriever import retrieve_for_query
@@ -100,16 +100,36 @@ def _build_history_messages(chat_history: list[dict], limit: int = 10) -> list:
 
 
 # ──────────────────────────────────────────────
-# Node: Router
+# Node: Query Analyzer (routing + rewriting)
 # ──────────────────────────────────────────────
 
-def router_node(state: GraphState) -> dict:
-    """Decide if the query needs retrieval or is chitchat."""
+def analyze_query_node(state: GraphState) -> dict:
+    """Route and rewrite the query in a single LLM call."""
     try:
-        decision = route_query(state["query"], state.get("chat_history", []))
+        analysis = analyze_query(state["query"], state.get("chat_history", []))
+
+        route = RouteDecision(
+            needs_retrieval=analysis.needs_retrieval,
+            reasoning=analysis.reasoning,
+        )
+
+        if analysis.needs_retrieval and analysis.rewritten_queries:
+            rewritten = RewrittenQuery(
+                original_query=state["query"],
+                rewritten_queries=analysis.rewritten_queries,
+                reasoning=analysis.reasoning,
+            )
+        else:
+            rewritten = create_fallback_rewrite(state["query"])
+
+        return {"route": route, "rewritten": rewritten}
+
     except Exception:
-        decision = RouteDecision(needs_retrieval=True, reasoning="Fallback: assuming retrieval needed.")
-    return {"route": decision}
+        # Fallback: assume retrieval needed, use original query
+        return {
+            "route": RouteDecision(needs_retrieval=True, reasoning="Fallback: assuming retrieval needed."),
+            "rewritten": create_fallback_rewrite(state["query"]),
+        }
 
 
 # ──────────────────────────────────────────────
@@ -177,18 +197,6 @@ def check_documents_node(state: GraphState) -> dict:
             "sources": [],
         }
     return {}
-
-
-# ──────────────────────────────────────────────
-# Node: Query Rewriter
-# ──────────────────────────────────────────────
-
-def rewriter_node(state: GraphState) -> dict:
-    try:
-        rewritten = rewrite_query(state["query"], state.get("chat_history", []))
-    except Exception:
-        rewritten = create_fallback_rewrite(state["query"])
-    return {"rewritten": rewritten}
 
 
 # ──────────────────────────────────────────────
@@ -381,7 +389,7 @@ def generator_node(state: GraphState) -> dict:
 # Conditional Edges
 # ──────────────────────────────────────────────
 
-def route_after_router(state: GraphState) -> str:
+def route_after_analyzer(state: GraphState) -> str:
     route = state.get("route")
     if route and not route.needs_retrieval:
         return "chitchat"
@@ -391,7 +399,7 @@ def route_after_router(state: GraphState) -> str:
 def route_after_check_documents(state: GraphState) -> str:
     if state.get("answer"):
         return END
-    return "rewriter"
+    return "full_doc_detector"
 
 
 def route_after_full_doc_detector(state: GraphState) -> str:
@@ -408,34 +416,33 @@ def route_after_full_doc_detector(state: GraphState) -> str:
 def build_rag_graph() -> StateGraph:
     workflow = StateGraph(GraphState)
 
-    workflow.add_node("router", router_node)
+    workflow.add_node("analyzer", analyze_query_node)
     workflow.add_node("chitchat", chitchat_node)
     workflow.add_node("check_documents", check_documents_node)
-    workflow.add_node("rewriter", rewriter_node)
     workflow.add_node("full_doc_detector", full_doc_detector_node)
     workflow.add_node("full_doc_retriever", full_doc_retriever_node)
     workflow.add_node("retriever", retriever_node)
     workflow.add_node("generator", generator_node)
 
-    workflow.set_entry_point("router")
+    workflow.set_entry_point("analyzer")
 
+    # analyzer → chitchat OR check_documents
     workflow.add_conditional_edges(
-        "router",
-        route_after_router,
+        "analyzer",
+        route_after_analyzer,
         {"chitchat": "chitchat", "check_documents": "check_documents"},
     )
 
     workflow.add_edge("chitchat", END)
 
+    # check_documents → full_doc_detector OR END (no docs)
     workflow.add_conditional_edges(
         "check_documents",
         route_after_check_documents,
-        {"rewriter": "rewriter", END: END},
+        {"full_doc_detector": "full_doc_detector", END: END},
     )
 
-    # rewriter → full_doc_detector → full_doc_retriever OR retriever
-    workflow.add_edge("rewriter", "full_doc_detector")
-
+    # full_doc_detector → full_doc_retriever OR retriever
     workflow.add_conditional_edges(
         "full_doc_detector",
         route_after_full_doc_detector,
@@ -463,10 +470,9 @@ _rag_graph = build_rag_graph()
 # Node labels in Hebrew for the UI
 # ──────────────────────────────────────────────
 NODE_LABELS = {
-    "router":            {"label": "מנתב את השאילתה",          "icon": "🧭"},
+    "analyzer":          {"label": "מנתח ומשכתב את השאילתה",   "icon": "🧭"},
     "chitchat":          {"label": "מייצר תגובת שיחה",         "icon": "💬"},
     "check_documents":   {"label": "בודק זמינות מסמכים",       "icon": "📋"},
-    "rewriter":          {"label": "משכתב את השאילתה לחיפוש",  "icon": "✏️"},
     "full_doc_detector": {"label": "בודק אם נדרש מסמך מלא",   "icon": "🔍"},
     "full_doc_retriever":{"label": "מאחזר מסמך מלא",           "icon": "📄"},
     "retriever":         {"label": "מחפש מידע רלוונטי",        "icon": "🗂️"},
@@ -713,14 +719,14 @@ def stream_rag_pipeline(
 def _get_step_detail(node_name: str, state: dict) -> str:
     """Extract a short human-readable detail for a completed node."""
     try:
-        if node_name == "router":
+        if node_name == "analyzer":
             route = state.get("route")
-            if route:
-                return "שיחת חולין" if not route.needs_retrieval else "נדרש אחזור מסמכים"
-        elif node_name == "rewriter":
             rw = state.get("rewritten")
-            if rw and rw.rewritten_queries:
+            if route and not route.needs_retrieval:
+                return "שיחת חולין"
+            elif rw and rw.rewritten_queries:
                 return " | ".join(rw.rewritten_queries[:3])
+            return "נדרש אחזור מסמכים"
         elif node_name == "full_doc_detector":
             fd = state.get("full_doc_decision")
             if fd:
