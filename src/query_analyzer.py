@@ -13,6 +13,7 @@ from langchain_core.messages import HumanMessage, AIMessage
 from pydantic import BaseModel, Field
 
 from config import GOOGLE_API_KEY, LLM_MODEL, LLM_TIMEOUT_SHORT, LLM_MAX_RETRIES
+from src.prompt_store import load_prompt
 
 
 class QueryAnalysis(BaseModel):
@@ -106,8 +107,12 @@ def analyze_query(query: str, chat_history: list[dict] | None = None) -> QueryAn
             else:
                 history_messages.append(AIMessage(content=content))
 
+    # Pull the active prompt from Langfuse (label="production"), falling back
+    # to the hard-coded literal above if Langfuse is unavailable.
+    system_prompt = load_prompt("analyzer-system", fallback=ANALYZER_SYSTEM_PROMPT)
+
     prompt = ChatPromptTemplate.from_messages([
-        ("system", ANALYZER_SYSTEM_PROMPT),
+        ("system", system_prompt),
         MessagesPlaceholder("chat_history"),
         ("human", "{query}"),
     ])

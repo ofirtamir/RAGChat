@@ -21,6 +21,7 @@ from src.full_doc_detector import detect_full_document_need, create_fallback_ful
 from src.planner import create_fallback_plan, QueryPlan
 from src.retriever import retrieve_for_query
 from src.vector_store import get_document_count, list_document_sources, get_all_chunks_for_source
+from src.prompt_store import load_prompt
 from config import (
     GOOGLE_API_KEY, LLM_MODEL, LLM_TEMPERATURE, LLM_MAX_OUTPUT_TOKENS,
     LLM_TIMEOUT_LONG, LLM_MAX_RETRIES,
@@ -166,8 +167,9 @@ def chitchat_node(state: GraphState) -> dict:
 
     try:
         llm = _get_llm()
+        system_prompt = load_prompt("chitchat-system", fallback=CHITCHAT_SYSTEM_PROMPT)
         prompt = ChatPromptTemplate.from_messages([
-            ("system", CHITCHAT_SYSTEM_PROMPT),
+            ("system", system_prompt),
             MessagesPlaceholder("chat_history"),
             ("human", "{query}"),
         ])
@@ -359,6 +361,7 @@ def generator_node(state: GraphState) -> dict:
                 )
             context = "\n\n".join(context_parts)
 
+            # full-doc generator: not yet migrated to Langfuse, stays hard-coded
             prompt = ChatPromptTemplate.from_messages([
                 ("system", FULL_DOC_SYSTEM_PROMPT),
                 MessagesPlaceholder("chat_history"),
@@ -370,8 +373,9 @@ def generator_node(state: GraphState) -> dict:
         elif not plan.is_complex:
             context = _format_docs(docs)
 
+            system_prompt = load_prompt("answer-system", fallback=ANSWER_SYSTEM_PROMPT)
             prompt = ChatPromptTemplate.from_messages([
-                ("system", ANSWER_SYSTEM_PROMPT),
+                ("system", system_prompt),
                 MessagesPlaceholder("chat_history"),
                 ("human", "{query}"),
             ])
@@ -386,8 +390,9 @@ def generator_node(state: GraphState) -> dict:
 
             combined = "\n\n===\n\n".join(sub_results)
 
+            system_prompt = load_prompt("synthesis-system", fallback=SYNTHESIS_SYSTEM_PROMPT)
             prompt = ChatPromptTemplate.from_messages([
-                ("system", SYNTHESIS_SYSTEM_PROMPT),
+                ("system", system_prompt),
                 MessagesPlaceholder("chat_history"),
                 ("human", "{query}"),
             ])
@@ -586,8 +591,9 @@ def _build_llm_chain(state: dict, node_name: str):
     history = _build_history_messages(chat_history)
 
     if node_name == "chitchat":
+        system_prompt = load_prompt("chitchat-system", fallback=CHITCHAT_SYSTEM_PROMPT)
         prompt = ChatPromptTemplate.from_messages([
-            ("system", CHITCHAT_SYSTEM_PROMPT),
+            ("system", system_prompt),
             MessagesPlaceholder("chat_history"),
             ("human", "{query}"),
         ])
@@ -613,6 +619,7 @@ def _build_llm_chain(state: dict, node_name: str):
                 f"=== Document: {source} ===\n{_format_docs(source_docs)}"
             )
         context = "\n\n".join(context_parts)
+        # full-doc generator: not yet migrated to Langfuse, stays hard-coded
         prompt = ChatPromptTemplate.from_messages([
             ("system", FULL_DOC_SYSTEM_PROMPT),
             MessagesPlaceholder("chat_history"),
@@ -623,8 +630,9 @@ def _build_llm_chain(state: dict, node_name: str):
 
     elif not plan.is_complex:
         context = _format_docs(docs)
+        system_prompt = load_prompt("answer-system", fallback=ANSWER_SYSTEM_PROMPT)
         prompt = ChatPromptTemplate.from_messages([
-            ("system", ANSWER_SYSTEM_PROMPT),
+            ("system", system_prompt),
             MessagesPlaceholder("chat_history"),
             ("human", "{query}"),
         ])
@@ -637,8 +645,9 @@ def _build_llm_chain(state: dict, node_name: str):
             sq_docs = [d for d in docs if d.metadata.get("_sub_query") == sq]
             sub_results.append(f"Sub-query: {sq}\nRetrieved context:\n{_format_docs(sq_docs)}")
         combined = "\n\n===\n\n".join(sub_results)
+        system_prompt = load_prompt("synthesis-system", fallback=SYNTHESIS_SYSTEM_PROMPT)
         prompt = ChatPromptTemplate.from_messages([
-            ("system", SYNTHESIS_SYSTEM_PROMPT),
+            ("system", system_prompt),
             MessagesPlaceholder("chat_history"),
             ("human", "{query}"),
         ])
