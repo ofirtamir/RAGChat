@@ -13,6 +13,7 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.documents import Document
 
 from config import GOOGLE_API_KEY, LLM_MODEL, LLM_TIMEOUT_SHORT, LLM_MAX_RETRIES
+from src.prompt_store import load_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -72,7 +73,12 @@ def rerank_documents(
 
     try:
         llm = _get_reranker_llm()
-        prompt = RERANK_PROMPT.format(query=query, chunks=chunks_str)
+        # Pull the active prompt from Langfuse (label="production"), falling
+        # back to the hard-coded literal above if Langfuse is unavailable.
+        # The returned string uses single-brace {var} placeholders, which is
+        # exactly what str.format() expects — so no extra conversion needed.
+        prompt_template = load_prompt("reranker-system", fallback=RERANK_PROMPT)
+        prompt = prompt_template.format(query=query, chunks=chunks_str)
         response = llm.invoke(prompt)
         content = response.content.strip()
 

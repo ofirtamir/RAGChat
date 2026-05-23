@@ -114,7 +114,12 @@ def _collect_prompts() -> list[PromptSpec]:
         ANSWER_SYSTEM_PROMPT,
         SYNTHESIS_SYSTEM_PROMPT,
         CHITCHAT_SYSTEM_PROMPT,
+        FULL_DOC_SYSTEM_PROMPT as FULL_DOC_GENERATOR_PROMPT,
     )
+    from src.full_doc_detector import (
+        FULL_DOC_SYSTEM_PROMPT as FULL_DOC_DETECTOR_PROMPT,
+    )
+    from src.reranker import RERANK_PROMPT
 
     return [
         PromptSpec(
@@ -136,6 +141,21 @@ def _collect_prompts() -> list[PromptSpec]:
             name="chitchat-system",
             source=CHITCHAT_SYSTEM_PROMPT,
             tags=("rag", "chitchat"),
+        ),
+        PromptSpec(
+            name="reranker-system",
+            source=RERANK_PROMPT,
+            tags=("rag", "reranker"),
+        ),
+        PromptSpec(
+            name="full-doc-detector-system",
+            source=FULL_DOC_DETECTOR_PROMPT,
+            tags=("rag", "full-doc", "router"),
+        ),
+        PromptSpec(
+            name="full-doc-generator-system",
+            source=FULL_DOC_GENERATOR_PROMPT,
+            tags=("rag", "full-doc", "generator"),
         ),
     ]
 

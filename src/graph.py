@@ -361,9 +361,11 @@ def generator_node(state: GraphState) -> dict:
                 )
             context = "\n\n".join(context_parts)
 
-            # full-doc generator: not yet migrated to Langfuse, stays hard-coded
+            system_prompt = load_prompt(
+                "full-doc-generator-system", fallback=FULL_DOC_SYSTEM_PROMPT
+            )
             prompt = ChatPromptTemplate.from_messages([
-                ("system", FULL_DOC_SYSTEM_PROMPT),
+                ("system", system_prompt),
                 MessagesPlaceholder("chat_history"),
                 ("human", "{query}"),
             ])
@@ -619,9 +621,11 @@ def _build_llm_chain(state: dict, node_name: str):
                 f"=== Document: {source} ===\n{_format_docs(source_docs)}"
             )
         context = "\n\n".join(context_parts)
-        # full-doc generator: not yet migrated to Langfuse, stays hard-coded
+        system_prompt = load_prompt(
+            "full-doc-generator-system", fallback=FULL_DOC_SYSTEM_PROMPT
+        )
         prompt = ChatPromptTemplate.from_messages([
-            ("system", FULL_DOC_SYSTEM_PROMPT),
+            ("system", system_prompt),
             MessagesPlaceholder("chat_history"),
             ("human", "{query}"),
         ])
