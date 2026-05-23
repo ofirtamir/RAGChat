@@ -26,6 +26,7 @@ from langchain_core.messages import HumanMessage, AIMessage
 from pydantic import BaseModel, Field
 
 from config import GOOGLE_API_KEY, LLM_MODEL, LLM_TIMEOUT_SHORT, LLM_MAX_RETRIES
+from src.prompt_store import load_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -179,8 +180,14 @@ def detect_full_document_need(
             else:
                 history_messages.append(AIMessage(content=content))
 
+    # Pull the active prompt from Langfuse (label="production"), falling back
+    # to the hard-coded literal above if Langfuse is unavailable.
+    system_prompt = load_prompt(
+        "full-doc-detector-system", fallback=FULL_DOC_SYSTEM_PROMPT
+    )
+
     prompt = ChatPromptTemplate.from_messages([
-        ("system", FULL_DOC_SYSTEM_PROMPT),
+        ("system", system_prompt),
         MessagesPlaceholder("chat_history"),
         ("human", "{query}"),
     ])
