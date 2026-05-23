@@ -6,7 +6,18 @@ Triggered by questions like:
 - "סכם את המסמך" / "summarize the document"
 - "מה כל הנושאים ב-X?" / "what are all the topics in X?"
 - "תאר את כל מה שכתוב ב-X" / "describe everything in X"
+
+A cheap regex heuristic gates the LLM call: only queries containing words
+that plausibly indicate full-document intent ("סכם", "summarize",
+"כל הנושאים", "list all", …) actually invoke the detector LLM.  For the
+vast majority of factual questions ("מה השווי של…", "אילו פגמים…") we
+skip the LLM call entirely and return ``needs_full_document=False``
+immediately.  This avoids ~1 LLM round-trip per query without losing
+functionality, because the LLM was almost always answering "no" anyway.
 """
+
+import logging
+import re
 
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
@@ -15,6 +26,56 @@ from langchain_core.messages import HumanMessage, AIMessage
 from pydantic import BaseModel, Field
 
 from config import GOOGLE_API_KEY, LLM_MODEL, LLM_TIMEOUT_SHORT, LLM_MAX_RETRIES
+
+logger = logging.getLogger(__name__)
+
+
+# ──────────────────────────────────────────────
+# Heuristic gate
+# ──────────────────────────────────────────────
+# Patterns that plausibly indicate "I want the WHOLE document, not just the
+# most similar chunks". We err on the side of false positives (running the
+# LLM for a borderline case) over false negatives (skipping the LLM for a
+# real summary request), since the LLM is the final arbiter.
+#
+# Hebrew note: many roots have several inflected forms. We match a few
+# strong, multi-character anchors rather than every conjugation, to keep the
+# false-positive rate low. "הסכם" (agreement) is intentionally NOT in the
+# list because it would incorrectly trigger on every contract-related query.
+_FULL_DOC_INDICATORS: tuple[re.Pattern, ...] = (
+    # Hebrew — summarize / summary
+    re.compile(r"\bתסכם\w*"),                     # תסכם / תסכמי / תסכמו
+    re.compile(r"\bסכם\s+(?:את|לי)\b"),           # סכם את / סכם לי
+    re.compile(r"\bלסכם\b"),                       # לסכם
+    re.compile(r"\bסיכום\b"),                      # סיכום
+    re.compile(r"\bתקציר\b"),                      # תקציר
+    re.compile(r"\bסקיר\w*"),                     # סקירה / סקור
+    # Hebrew — "all of …"
+    re.compile(r"\bכל\s+ה?(?:נושאים|סעיפים|הפרטים|המידע|התוכן|הנקודות|הפרקים)\b"),
+    re.compile(r"\bכל\s+מה\s+ש"),                  # "כל מה ש…"
+    re.compile(r"\bמה\s+כל\b"),                    # "מה כל …"
+    re.compile(r"\bתאר\s+את\s+כל\b"),              # "תאר את כל …"
+    re.compile(r"\bפרט\s+את\s+כל\b"),              # "פרט את כל …"
+    # English — summarize / summary
+    re.compile(r"\bsummari[sz]e\b", re.IGNORECASE),
+    re.compile(r"\bsummary\b", re.IGNORECASE),
+    re.compile(r"\boverview\b", re.IGNORECASE),
+    re.compile(r"\babstract\b", re.IGNORECASE),
+    re.compile(r"\boutline\b", re.IGNORECASE),
+    # English — "all / everything"
+    re.compile(r"\blist\s+(?:all|every|out)\b", re.IGNORECASE),
+    re.compile(r"\b(?:all|every)\s+(?:topics?|themes?|sections?|chapters?|points?)\b", re.IGNORECASE),
+    re.compile(r"\bwhat\s+are\s+all\b", re.IGNORECASE),
+    re.compile(r"\beverything\s+(?:in|about|that)\b", re.IGNORECASE),
+    re.compile(r"\bcomprehensive\b", re.IGNORECASE),
+)
+
+
+def _looks_like_full_doc_request(query: str) -> bool:
+    """Cheap regex pre-filter: does the query plausibly want a full document?"""
+    if not query:
+        return False
+    return any(p.search(query) for p in _FULL_DOC_INDICATORS)
 
 
 class FullDocDecision(BaseModel):
@@ -90,6 +151,18 @@ def detect_full_document_need(
             needs_full_document=False,
             target_sources=[],
             reasoning="No documents available in the knowledge base.",
+        )
+
+    # Heuristic gate: if the query doesn't contain any wording that
+    # plausibly asks for a whole document, skip the LLM call entirely.
+    # This saves ~1 LLM round-trip on the majority of factual questions,
+    # where the detector would have answered "no" anyway.
+    if not _looks_like_full_doc_request(query):
+        logger.debug("full_doc_detector: heuristic gate skipped LLM call for query=%r", query)
+        return FullDocDecision(
+            needs_full_document=False,
+            target_sources=[],
+            reasoning="Heuristic gate: query does not contain full-document indicators.",
         )
 
     llm = _get_detector_llm()
