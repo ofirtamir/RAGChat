@@ -64,6 +64,7 @@ export function Sidebar({
               {sessions.map(s => (
                 <div
                   key={s.id}
+                  dir="rtl"
                   className={cn(
                     "group flex items-center gap-1 rounded-lg px-1 transition-colors",
                     s.id === activeSessionId
@@ -73,13 +74,19 @@ export function Sidebar({
                 >
                   <button
                     onClick={() => onSelectSession(s.id)}
+                    dir="rtl"
                     className={cn(
-                      "flex-1 min-w-0 px-2 py-2 text-sm flex items-center gap-2 overflow-hidden",
+                      "flex-1 min-w-0 px-2 py-2 text-sm flex items-center gap-2",
                       s.id === activeSessionId && "font-medium"
                     )}
                   >
                     <MessageSquare className="w-3.5 h-3.5 shrink-0" />
-                    <span className="truncate">{s.title}</span>
+                    <span
+                      dir="rtl"
+                      className="block flex-1 min-w-0 truncate text-right"
+                    >
+                      {s.title}
+                    </span>
                   </button>
                   {onDeleteSession && (
                     <button
