@@ -55,6 +55,3 @@ RETRIEVER_CANDIDATES = 20  # Fetch more candidates for reranking
 
 # ChromaDB
 CHROMA_COLLECTION_NAME = "ragchat_documents"
-
-# Planner
-PLANNER_MAX_SUBQUERIES = 4
