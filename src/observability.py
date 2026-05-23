@@ -64,8 +64,8 @@ def flush_langfuse() -> None:
     if not is_langfuse_enabled():
         return
     try:
-        from langfuse import Langfuse
-        Langfuse().flush()
+        from langfuse import get_client
+        get_client().flush()
     except Exception:
         pass
 
@@ -83,41 +83,48 @@ def start_trace_span(
     """
     Open an explicit Langfuse parent span and attach user/session metadata to
     its trace.  All LangChain callback spans nested inside this context become
-    children of the span and inherit its trace — so the trace shows up in
-    Langfuse with user_id / session_id properly attributed.
+    children of the span and inherit its trace — so a single user request
+    shows up in Langfuse as ONE trace with all sub-operations nested
+    underneath (analyzer LLM call, retriever, generator LLM call, …) instead
+    of multiple disjoint root traces.
 
-    Works around the v3 LangChain integration bug where langfuse_user_id /
-    langfuse_session_id in run metadata never reach the parent trace.
+    Works around the v3 LangChain integration behaviour where langfuse_user_id
+    / langfuse_session_id in run metadata never reach the parent trace.
     See https://github.com/orgs/langfuse/discussions/8493
+
+    Implementation note: we MUST use ``with client.start_as_current_span(...)``
+    so that the OpenTelemetry context is properly entered and exited.  An
+    earlier version of this helper called ``.__enter__()`` directly on the
+    returned context manager and then dropped the reference, which left the
+    OTEL context only half-set — subsequent LangChain CallbackHandler runs
+    didn't see the active span and silently created their own root traces.
     """
     if not is_langfuse_enabled():
         yield None
         return
 
-    span = None
     try:
-        from langfuse import Langfuse
-        client = Langfuse()
-        span = client.start_as_current_span(name=name, input=input_data or {}).__enter__()
-        try:
-            span.update_trace(
-                user_id=user_id,
-                session_id=session_id,
-                name=name,
-            )
-        except Exception as e:
-            logger.warning("Failed to update_trace: %s", e)
+        from langfuse import get_client
+        client = get_client()
     except Exception as e:
-        logger.warning("Failed to start Langfuse trace span: %s", e)
+        logger.warning("Failed to obtain Langfuse client: %s", e)
+        yield None
+        return
 
     try:
-        yield span
-    finally:
-        if span is not None:
+        with client.start_as_current_span(name=name, input=input_data or {}) as span:
             try:
-                span.__exit__(None, None, None)
-            except Exception:
-                pass
+                span.update_trace(
+                    user_id=user_id,
+                    session_id=session_id,
+                    name=name,
+                )
+            except Exception as e:
+                logger.warning("Failed to update_trace: %s", e)
+            yield span
+    except Exception as e:
+        logger.warning("Failed to start Langfuse trace span: %s", e)
+        yield None
 
 
 def get_langfuse_handler(
@@ -131,6 +138,14 @@ def get_langfuse_handler(
 
     Pass the returned handler in the LangChain/LangGraph config dict:
         config = {"callbacks": [handler]}
+
+    The returned metadata intentionally does NOT include
+    ``langfuse_trace_name``.  When this callback runs inside an active
+    Langfuse span (see ``start_trace_span``) the handler nests its
+    observations under that span; passing a trace name here caused the
+    handler to behave as if it owned a brand-new root trace, producing
+    several disconnected traces per user request.  The parent trace is
+    already named by ``start_trace_span``.
 
     Returns (handler, {}) or (None, {}) when unavailable.
     """
@@ -156,7 +171,6 @@ def get_langfuse_handler(
             **(metadata or {}),
             "langfuse_session_id": session_id,
             "langfuse_user_id": user_id,
-            "langfuse_trace_name": trace_name,
         }
 
         return handler, langfuse_metadata
