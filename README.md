@@ -81,4 +81,3 @@ All settings can be adjusted in `config.py`:
 | `CHUNK_SIZE` | `1000` | Characters per chunk |
 | `CHUNK_OVERLAP` | `200` | Overlap between chunks |
 | `RETRIEVER_K` | `5` | Number of chunks to retrieve |
-| `PLANNER_MAX_SUBQUERIES` | `4` | Max sub-queries for complex questions |
