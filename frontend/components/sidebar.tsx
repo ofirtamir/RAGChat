@@ -1,7 +1,6 @@
 "use client"
 
-import { useState, useRef } from "react"
-import { ScrollArea } from "@/components/ui/scroll-area"
+import { useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Separator } from "@/components/ui/separator"
 import { ThemeToggle } from "@/components/theme-toggle"
@@ -56,7 +55,7 @@ export function Sidebar({
         <Separator />
 
         {/* Chat history */}
-        <ScrollArea className="flex-1 p-2">
+        <div className="flex-1 overflow-y-auto p-2">
           {sessions.length > 0 && (
             <div className="mb-3">
               <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground px-2 py-1">
@@ -65,9 +64,8 @@ export function Sidebar({
               {sessions.map(s => (
                 <div
                   key={s.id}
-                  dir="rtl"
                   className={cn(
-                    "group flex items-center gap-1 rounded-lg ps-1 transition-colors",
+                    "group flex items-center gap-1 rounded-lg px-1 transition-colors",
                     s.id === activeSessionId
                       ? "bg-accent text-accent-foreground"
                       : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
@@ -75,14 +73,13 @@ export function Sidebar({
                 >
                   <button
                     onClick={() => onSelectSession(s.id)}
-                    dir="rtl"
                     className={cn(
-                      "flex-1 min-w-0 text-right px-3 py-2 text-sm flex items-center gap-2",
+                      "flex-1 min-w-0 px-2 py-2 text-sm flex items-center gap-2 overflow-hidden",
                       s.id === activeSessionId && "font-medium"
                     )}
                   >
                     <MessageSquare className="w-3.5 h-3.5 shrink-0" />
-                    <span className="truncate text-right" dir="rtl">{s.title}</span>
+                    <span className="truncate">{s.title}</span>
                   </button>
                   {onDeleteSession && (
                     <button
@@ -100,7 +97,7 @@ export function Sidebar({
               ))}
             </div>
           )}
-        </ScrollArea>
+        </div>
 
         <Separator />
 
