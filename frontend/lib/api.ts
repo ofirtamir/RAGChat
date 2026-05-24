@@ -17,26 +17,31 @@ export interface ChatApiResponse {
   plan: { is_complex: boolean; sub_queries: string[]; reasoning: string } | null
 }
 
-export interface UserContext {
-  id?: string
-  email?: string | null
+/**
+ * Build common request headers, attaching the Google ID token as a Bearer
+ * token when the caller has one. The FastAPI backend authenticates every
+ * request by verifying this token against Google's public keys — without
+ * it, the backend rejects the request with 401.
+ */
+function authHeaders(token: string | undefined, extra?: HeadersInit): HeadersInit {
+  const headers: Record<string, string> = { ...(extra as Record<string, string>) }
+  if (token) headers["Authorization"] = `Bearer ${token}`
+  return headers
 }
 
 export async function sendMessage(
   query: string,
   chatHistory: { role: string; content: string }[],
   sessionId: string,
-  user?: UserContext
+  token: string | undefined,
 ): Promise<ChatApiResponse> {
   const res = await fetch(`${API_BASE}/chat`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: authHeaders(token, { "Content-Type": "application/json" }),
     body: JSON.stringify({
       query,
       chat_history: chatHistory,
       session_id: sessionId,
-      user_id: user?.id,
-      user_email: user?.email,
     }),
   })
   if (!res.ok) {
@@ -56,17 +61,15 @@ export async function sendMessageStreaming(
   sessionId: string,
   onStep: (step: ThinkingStep) => void,
   onToken: (token: string) => void,
-  user?: UserContext,
+  token: string | undefined,
 ): Promise<ChatApiResponse> {
   const res = await fetch(`${API_BASE}/chat/stream`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: authHeaders(token, { "Content-Type": "application/json" }),
     body: JSON.stringify({
       query,
       chat_history: chatHistory,
       session_id: sessionId,
-      user_id: user?.id,
-      user_email: user?.email,
     }),
   })
 
@@ -139,10 +142,17 @@ export async function sendMessageStreaming(
   return result
 }
 
-export async function uploadFiles(files: File[]): Promise<{ results: { filename: string; status: string; chunks?: number; message?: string }[] }> {
+export async function uploadFiles(
+  files: File[],
+  token: string | undefined,
+): Promise<{ results: { filename: string; status: string; chunks?: number; message?: string }[] }> {
   const formData = new FormData()
   files.forEach(f => formData.append("files", f))
-  const res = await fetch(`${API_BASE}/upload`, { method: "POST", body: formData })
+  const res = await fetch(`${API_BASE}/upload`, {
+    method: "POST",
+    headers: authHeaders(token),
+    body: formData,
+  })
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: "Upload failed" }))
     throw new Error(err.detail || "Upload failed")
@@ -150,14 +160,21 @@ export async function uploadFiles(files: File[]): Promise<{ results: { filename:
   return res.json()
 }
 
-export async function getDocuments(): Promise<{ total_chunks: number; documents: { source: string; chunks: number; chars: number }[] }> {
-  const res = await fetch(`${API_BASE}/documents`)
+export async function getDocuments(
+  token: string | undefined,
+): Promise<{ total_chunks: number; documents: { source: string; chunks: number; chars: number }[] }> {
+  const res = await fetch(`${API_BASE}/documents`, {
+    headers: authHeaders(token),
+  })
   if (!res.ok) throw new Error("Failed to fetch documents")
   return res.json()
 }
 
-export async function clearDocuments(): Promise<void> {
-  const res = await fetch(`${API_BASE}/documents`, { method: "DELETE" })
+export async function clearDocuments(token: string | undefined): Promise<void> {
+  const res = await fetch(`${API_BASE}/documents`, {
+    method: "DELETE",
+    headers: authHeaders(token),
+  })
   if (!res.ok) throw new Error("Failed to clear documents")
 }
 
@@ -178,38 +195,47 @@ export interface StoredSession {
   updated_at: string
 }
 
-export async function listSessions(userId: string): Promise<SessionSummary[]> {
-  const res = await fetch(`${API_BASE}/sessions?user_id=${encodeURIComponent(userId)}`)
+export async function listSessions(token: string | undefined): Promise<SessionSummary[]> {
+  const res = await fetch(`${API_BASE}/sessions`, {
+    headers: authHeaders(token),
+  })
   if (!res.ok) throw new Error("Failed to list sessions")
   const data = await res.json()
   return data.sessions ?? []
 }
 
-export async function getSession(sessionId: string, userId: string): Promise<StoredSession> {
+export async function getSession(
+  sessionId: string,
+  token: string | undefined,
+): Promise<StoredSession> {
   const res = await fetch(
-    `${API_BASE}/sessions/${encodeURIComponent(sessionId)}?user_id=${encodeURIComponent(userId)}`,
+    `${API_BASE}/sessions/${encodeURIComponent(sessionId)}`,
+    { headers: authHeaders(token) },
   )
   if (!res.ok) throw new Error("Failed to fetch session")
   return res.json()
 }
 
 export async function upsertSession(
-  userId: string,
   session: { id: string; title: string; messages: unknown[] },
+  token: string | undefined,
 ): Promise<SessionSummary> {
   const res = await fetch(`${API_BASE}/sessions/${encodeURIComponent(session.id)}`, {
     method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ ...session, user_id: userId }),
+    headers: authHeaders(token, { "Content-Type": "application/json" }),
+    body: JSON.stringify(session),
   })
   if (!res.ok) throw new Error("Failed to save session")
   return res.json()
 }
 
-export async function deleteSession(sessionId: string, userId: string): Promise<void> {
+export async function deleteSession(
+  sessionId: string,
+  token: string | undefined,
+): Promise<void> {
   const res = await fetch(
-    `${API_BASE}/sessions/${encodeURIComponent(sessionId)}?user_id=${encodeURIComponent(userId)}`,
-    { method: "DELETE" },
+    `${API_BASE}/sessions/${encodeURIComponent(sessionId)}`,
+    { method: "DELETE", headers: authHeaders(token) },
   )
   if (!res.ok) throw new Error("Failed to delete session")
 }

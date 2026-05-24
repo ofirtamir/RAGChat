@@ -20,16 +20,26 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
   trustHost: true,
   providers: [Google],
   callbacks: {
-    // Persist the Google `sub` as `id` on the session for use as Langfuse user_id.
+    // Persist the Google `sub` (used as Langfuse user_id) AND the raw Google
+    // ID token (forwarded to the FastAPI backend as a Bearer token, where it
+    // is verified against Google's public keys to authenticate the user).
     async jwt({ token, account, profile }) {
       if (account && profile) {
         token.id = profile.sub
+      }
+      // `account` is only present on the initial sign-in callback, so we
+      // store the id_token persistently on the encrypted NextAuth JWT.
+      if (account?.id_token) {
+        token.idToken = account.id_token
       }
       return token
     },
     async session({ session, token }) {
       if (session.user && token.id) {
         session.user.id = token.id as string
+      }
+      if (token.idToken) {
+        session.idToken = token.idToken as string
       }
       return session
     },

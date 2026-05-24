@@ -76,6 +76,7 @@ function loadSessionsFromLocalStorage(): { sessions: ChatSession[]; activeId: st
 export function ChatLayout() {
   const { data: authSession, status: authStatus } = useSession()
   const userId = authSession?.user?.id
+  const authToken = authSession?.idToken
   const [sessions, setSessions] = useState<ChatSession[]>(() => [createSession()])
   const [activeId, setActiveId] = useState<string>(() => "")
   const [historyLoaded, setHistoryLoaded] = useState(false)
@@ -131,11 +132,11 @@ export function ChatLayout() {
 
   // Load persisted history when the user signs in
   useEffect(() => {
-    if (authStatus !== "authenticated" || !userId || historyLoaded) return
+    if (authStatus !== "authenticated" || !userId || !authToken || historyLoaded) return
     let cancelled = false
     ;(async () => {
       try {
-        const summaries = await listSessions(userId)
+        const summaries = await listSessions(authToken)
         if (cancelled) return
         if (summaries.length === 0) {
           setHistoryLoaded(true)
@@ -143,7 +144,7 @@ export function ChatLayout() {
         }
         // Fetch each session's full messages in parallel.
         const fulls = await Promise.all(
-          summaries.map(s => getSession(s.id, userId).catch(() => null)),
+          summaries.map(s => getSession(s.id, authToken).catch(() => null)),
         )
         if (cancelled) return
         const loaded: ChatSession[] = fulls
@@ -168,17 +169,18 @@ export function ChatLayout() {
       }
     })()
     return () => { cancelled = true }
-  }, [authStatus, userId, historyLoaded])
+  }, [authStatus, userId, authToken, historyLoaded])
 
   const activeSession = sessions.find(s => s.id === activeId)
 
   const refreshDocuments = useCallback(async () => {
+    if (!authToken) return
     try {
-      const data = await getDocuments()
+      const data = await getDocuments(authToken)
       setDocuments(data.documents)
       setTotalChunks(data.total_chunks)
     } catch {}
-  }, [])
+  }, [authToken])
 
   useEffect(() => { refreshDocuments() }, [refreshDocuments])
 
@@ -238,9 +240,7 @@ export function ChatLayout() {
           setIsStreaming(true)
           setStreamingAnswer(prev => prev + token)
         },
-        authSession?.user
-          ? { id: authSession.user.id, email: authSession.user.email }
-          : undefined,
+        authToken,
       )
 
       // Clear thinking/streaming state
@@ -264,13 +264,13 @@ export function ChatLayout() {
       updateSession(activeId, s => ({ ...s, messages: [...s.messages, assistantMsg] }))
 
       // Persist to backend (best-effort — never blocks the UI)
-      if (userId) {
+      if (authToken) {
         const finalMessages = [...activeSession.messages, userMsg, assistantMsg]
-        upsertSession(userId, {
+        upsertSession({
           id: activeId,
           title: sessionTitle,
           messages: finalMessages,
-        }).catch(err => console.error("Failed to save session:", err))
+        }, authToken).catch(err => console.error("Failed to save session:", err))
       }
     } catch (err) {
       setCurrentNode(undefined)
@@ -313,9 +313,9 @@ export function ChatLayout() {
       if (id === activeId) setActiveId(filtered[0].id)
       return filtered
     })
-    if (userId) {
+    if (authToken) {
       try {
-        await deleteSession(id, userId)
+        await deleteSession(id, authToken)
       } catch (err) {
         console.error("Failed to delete session on server:", err)
       }
@@ -323,10 +323,14 @@ export function ChatLayout() {
   }
 
   const handleUpload = async (files: File[]) => {
+    if (!authToken) {
+      setUploadError("נא להתחבר שוב")
+      return
+    }
     setIsUploading(true)
     setUploadError("")
     try {
-      const result = await uploadFiles(files)
+      const result = await uploadFiles(files, authToken)
       const failed = result.results?.filter(r => r.status !== "ok") ?? []
       if (failed.length > 0) {
         const msg = failed
@@ -344,7 +348,8 @@ export function ChatLayout() {
   }
 
   const handleClear = async () => {
-    await clearDocuments()
+    if (!authToken) return
+    await clearDocuments(authToken)
     await refreshDocuments()
   }
 
