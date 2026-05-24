@@ -7,6 +7,7 @@ LangGraph RAG pipeline with:
 """
 
 from typing import TypedDict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.output_parsers import StrOutputParser
@@ -266,12 +267,22 @@ def retriever_node(state: GraphState) -> dict:
         reasoning=f"{'פירוק מהשכתוב' if is_complex else 'שאילתה ישירה'}: {len(queries)} שאילתות חיפוש.",
     )
 
-    all_docs = []
-    for sq in queries:
+    def _retrieve_one(sq: str) -> list[Document]:
         docs = retrieve_for_query(sq)
         for doc in docs:
             doc.metadata["_sub_query"] = sq
-        all_docs.extend(docs)
+        return docs
+
+    all_docs = []
+    if len(queries) == 1:
+        all_docs = _retrieve_one(queries[0])
+    else:
+        # Run sub-queries in parallel threads — cuts latency from
+        # sum(t_i) to max(t_i) when there are 2-3 rewritten queries.
+        with ThreadPoolExecutor(max_workers=len(queries)) as pool:
+            futures = {pool.submit(_retrieve_one, sq): sq for sq in queries}
+            for future in as_completed(futures):
+                all_docs.extend(future.result())
 
     seen = set()
     unique_docs = []

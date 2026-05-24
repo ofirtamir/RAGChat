@@ -55,7 +55,10 @@ app.add_middleware(
 
 initialize_langfuse()
 
-_executor = ThreadPoolExecutor(max_workers=4)
+# Size the pool based on available CPUs.  Each streaming request blocks a
+# thread for the duration of the LLM call (I/O-bound), so we allow several
+# times the CPU count.  min(32, …) caps memory use on very large machines.
+_executor = ThreadPoolExecutor(max_workers=min(32, (os.cpu_count() or 4) * 4))
 
 
 class ChatRequest(BaseModel):
