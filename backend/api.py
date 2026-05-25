@@ -7,14 +7,13 @@ import os
 import sys
 import uuid
 import json
-import shutil
 import asyncio
 from pathlib import Path
 from typing import AsyncGenerator
 from concurrent.futures import ThreadPoolExecutor
 from queue import Queue, Empty
 
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI, UploadFile, File, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -34,7 +33,13 @@ from src.vector_store import (
 )
 from src.observability import initialize_langfuse
 from src import sessions_store
+from .auth import get_current_user, get_current_user_id
 from config import UPLOADS_DIR
+
+# Upload limits — enforced by streaming the file and counting bytes so a
+# malicious client can't just lie about Content-Length.
+_MAX_UPLOAD_BYTES_PER_FILE = 25 * 1024 * 1024  # 25 MB
+_MAX_UPLOAD_FILES_PER_REQUEST = 10
 
 app = FastAPI(title="RAGChat API", version="1.0.0")
 
@@ -65,8 +70,6 @@ class ChatRequest(BaseModel):
     query: str
     chat_history: list[dict] = []
     session_id: str | None = None
-    user_id: str | None = None
-    user_email: str | None = None
 
 
 class ChatResponse(BaseModel):
@@ -80,11 +83,12 @@ class ChatResponse(BaseModel):
 
 
 @app.post("/api/chat", response_model=ChatResponse)
-async def chat(request: ChatRequest):
+async def chat(
+    request: ChatRequest,
+    user_id: str = Depends(get_current_user_id),
+):
     """Run the RAG pipeline and return the result."""
     session_id = request.session_id or str(uuid.uuid4())
-    # Prefer the Google sub as user_id; fall back to email if missing.
-    user_id = request.user_id or request.user_email
     try:
         result = run_rag_pipeline(
             query=request.query,
@@ -137,10 +141,12 @@ def _run_stream_in_thread(
 
 
 @app.post("/api/chat/stream")
-async def chat_stream(request: ChatRequest):
+async def chat_stream(
+    request: ChatRequest,
+    user_id: str = Depends(get_current_user_id),
+):
     """Stream the RAG pipeline stages as SSE events, flushed in real-time."""
     session_id = request.session_id or str(uuid.uuid4())
-    user_id = request.user_id or request.user_email
 
     async def event_generator() -> AsyncGenerator[str, None]:
         q: Queue = Queue()
@@ -221,31 +227,115 @@ async def chat_stream(request: ChatRequest):
     )
 
 
+def _safe_upload_filename(raw_name: str | None) -> str:
+    """Reduce an uploaded filename to a basename safe to write inside UPLOADS_DIR.
+
+    Rejects path traversal (``../``), absolute paths, and empty/dotfile names.
+    Returns the bare filename (no directory components) on success.
+    """
+    if not raw_name:
+        raise HTTPException(status_code=400, detail="Missing filename")
+
+    # Strip any directory components the client tried to send. PurePosixPath
+    # handles forward slashes; we also reject backslashes (Windows clients).
+    if "\x00" in raw_name or "\\" in raw_name:
+        raise HTTPException(status_code=400, detail="Invalid filename")
+
+    name = Path(raw_name).name  # Path.name strips directories on both OSes
+    if not name or name in (".", "..") or name.startswith("."):
+        raise HTTPException(status_code=400, detail="Invalid filename")
+
+    return name
+
+
+async def _stream_upload_to_disk(file: UploadFile, dest: Path) -> int:
+    """Copy an UploadFile to disk in chunks, enforcing the size cap.
+
+    Returns the number of bytes written. Raises ``HTTPException`` when the
+    cap is exceeded — the partial file is removed before raising so we don't
+    leave attacker-controlled bytes on disk.
+    """
+    chunk_size = 1024 * 1024  # 1 MB
+    total = 0
+    with open(dest, "wb") as out:
+        while True:
+            chunk = await file.read(chunk_size)
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > _MAX_UPLOAD_BYTES_PER_FILE:
+                out.close()
+                dest.unlink(missing_ok=True)
+                raise HTTPException(
+                    status_code=413,
+                    detail=(
+                        f"File '{file.filename}' exceeds the "
+                        f"{_MAX_UPLOAD_BYTES_PER_FILE // (1024 * 1024)} MB per-file limit"
+                    ),
+                )
+            out.write(chunk)
+    return total
+
+
 @app.post("/api/upload")
-async def upload_documents(files: list[UploadFile] = File(...)):
-    """Upload and process documents into the vector store."""
+async def upload_documents(
+    files: list[UploadFile] = File(...),
+    _user: dict = Depends(get_current_user),
+):
+    """Upload and index documents into the vector store.
+
+    Requires a valid Google ID token. Each file is capped at 25 MB, with at
+    most 10 files per request, and filenames are sanitized so a malicious
+    client can't escape the uploads directory via ``../``.
+    """
+    if len(files) > _MAX_UPLOAD_FILES_PER_REQUEST:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Too many files in one request (max {_MAX_UPLOAD_FILES_PER_REQUEST})",
+        )
+
     results = []
     for file in files:
-        ext = Path(file.filename).suffix.lower()
-        if ext not in SUPPORTED_EXTENSIONS:
-            results.append({"filename": file.filename, "status": "error", "message": f"Unsupported extension: {ext}"})
-            continue
         try:
-            save_path = UPLOADS_DIR / file.filename
-            with open(save_path, "wb") as f:
-                shutil.copyfileobj(file.file, f)
+            safe_name = _safe_upload_filename(file.filename)
+        except HTTPException as e:
+            results.append({"filename": file.filename, "status": "error", "message": e.detail})
+            continue
+
+        ext = Path(safe_name).suffix.lower()
+        if ext not in SUPPORTED_EXTENSIONS:
+            results.append({"filename": safe_name, "status": "error", "message": f"Unsupported extension: {ext}"})
+            continue
+
+        save_path = UPLOADS_DIR / safe_name
+        # Defence-in-depth: ensure the resolved path is still inside UPLOADS_DIR.
+        # _safe_upload_filename already enforces this, but resolving guards
+        # against any future loosening of the sanitizer.
+        try:
+            resolved = save_path.resolve()
+            resolved.relative_to(UPLOADS_DIR.resolve())
+        except (ValueError, OSError):
+            results.append({"filename": safe_name, "status": "error", "message": "Invalid filename"})
+            continue
+
+        try:
+            await _stream_upload_to_disk(file, save_path)
             docs = load_document(save_path)
             chunks = chunk_documents(docs)
             add_documents(chunks)
-            results.append({"filename": file.filename, "status": "ok", "chunks": len(chunks)})
+            results.append({"filename": safe_name, "status": "ok", "chunks": len(chunks)})
+        except HTTPException:
+            # Size-cap rejections — re-raise so FastAPI returns the proper status.
+            raise
         except Exception as e:
-            results.append({"filename": file.filename, "status": "error", "message": str(e)})
+            results.append({"filename": safe_name, "status": "error", "message": str(e)})
+
     return {"results": results}
 
 
 @app.get("/api/documents")
-async def get_documents():
-    """Return stats and list of indexed documents."""
+async def get_documents(_user: dict = Depends(get_current_user)):
+    """Return stats and list of indexed documents (auth-only)."""
     try:
         sources = list_document_sources()
         total = get_document_count()
@@ -263,36 +353,36 @@ async def get_documents():
 
 
 @app.delete("/api/documents")
-async def delete_documents():
-    """Clear all documents from the vector store."""
+async def delete_documents(_user: dict = Depends(get_current_user)):
+    """Clear all documents from the vector store (auth-only)."""
     clear_vector_store()
     return {"status": "cleared"}
 
 
 # ── Chat session persistence ─────────────────────────────────────────────
-# Each user gets their own SQLite-backed history. Lookups are scoped by
-# user_id so users only ever see / mutate their own sessions.
+# Every endpoint here resolves the owner from the verified Google ID token,
+# never from the request body or query string. A caller cannot read, mutate,
+# or delete sessions belonging to a different user even by guessing their
+# Google sub.
 
 class SessionUpsertRequest(BaseModel):
     id: str
-    user_id: str
     title: str
     messages: list[dict]
 
 
 @app.get("/api/sessions")
-async def list_user_sessions(user_id: str):
-    """List all sessions for a user (no message bodies)."""
-    if not user_id:
-        raise HTTPException(status_code=400, detail="user_id is required")
+async def list_user_sessions(user_id: str = Depends(get_current_user_id)):
+    """List all sessions for the authenticated user."""
     return {"sessions": sessions_store.list_sessions(user_id)}
 
 
 @app.get("/api/sessions/{session_id}")
-async def get_user_session(session_id: str, user_id: str):
+async def get_user_session(
+    session_id: str,
+    user_id: str = Depends(get_current_user_id),
+):
     """Fetch a single session with all its messages."""
-    if not user_id:
-        raise HTTPException(status_code=400, detail="user_id is required")
     session = sessions_store.get_session(session_id, user_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -300,12 +390,16 @@ async def get_user_session(session_id: str, user_id: str):
 
 
 @app.put("/api/sessions/{session_id}")
-async def upsert_user_session(session_id: str, request: SessionUpsertRequest):
-    """Create or replace a session. Body must include the user_id of the owner."""
+async def upsert_user_session(
+    session_id: str,
+    request: SessionUpsertRequest,
+    user_id: str = Depends(get_current_user_id),
+):
+    """Create or replace a session owned by the authenticated user."""
     if session_id != request.id:
         raise HTTPException(status_code=400, detail="path id does not match body id")
     saved = sessions_store.save_session(
-        user_id=request.user_id,
+        user_id=user_id,
         session_id=request.id,
         title=request.title,
         messages=request.messages,
@@ -314,10 +408,11 @@ async def upsert_user_session(session_id: str, request: SessionUpsertRequest):
 
 
 @app.delete("/api/sessions/{session_id}")
-async def delete_user_session(session_id: str, user_id: str):
-    """Delete a session owned by user_id."""
-    if not user_id:
-        raise HTTPException(status_code=400, detail="user_id is required")
+async def delete_user_session(
+    session_id: str,
+    user_id: str = Depends(get_current_user_id),
+):
+    """Delete a session owned by the authenticated user."""
     ok = sessions_store.delete_session(session_id, user_id)
     if not ok:
         raise HTTPException(status_code=404, detail="Session not found")
