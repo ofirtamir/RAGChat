@@ -32,6 +32,27 @@ User Query → Planner → Retriever → LLM → Answer
 | `src/rag_chain.py` | Main RAG pipeline orchestration |
 | `app.py` | Streamlit chat UI |
 
+## Knowledge-Base Agents (gov.il integration)
+
+An **agent** is a self-contained knowledge base: its own Chroma collection plus a
+filter schema (committee, block/plot, date ranges, ...) that the user can set in the
+chat UI before asking. Agents are defined in `agents/*.json` and are created from
+[govil-scraper](../govil-scraper) collectors:
+
+```bash
+# 1. In govil-scraper: download documents + extract text (local pypdf, no OCR)
+python -m govil_scraper download decisive_appraisal_decisions --limit 10
+python -m govil_scraper extract-text decisive_appraisal_decisions
+
+# 2. In RAGChat: create the agent and ingest
+python scripts/create_govil_agent.py decisive_appraisal_decisions
+python scripts/ingest_govil.py decisive_appraisal_decisions            # --limit N for pilots
+```
+
+In the chat UI, pick the agent next to the input box and optionally set filters —
+retrieval then only searches chunks whose metadata matches. A new gov.il collector
+= run the same two commands with its name.
+
 ## Setup
 
 ### Prerequisites

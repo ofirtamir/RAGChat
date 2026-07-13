@@ -50,13 +50,15 @@ def get_document_count() -> int:
     return vs._collection.count()
 
 
-def list_document_sources() -> list[str]:
+def list_document_sources(vs: Chroma | None = None) -> list[str]:
     """Return a sorted list of unique document source names in the store.
 
-    Uses a paginated scan with a small page size so that only source fields
-    are touched — avoids pulling every chunk's full metadata dict into RAM.
+    Pass vs to scan a specific (e.g. agent) collection; defaults to the
+    uploads store. Uses a paginated scan with a small page size so that only
+    source fields are touched — avoids pulling every chunk's full metadata
+    dict into RAM.
     """
-    vs = get_vector_store()
+    vs = vs or get_vector_store()
     collection = vs._collection
     total = collection.count()
     if total == 0:
@@ -80,9 +82,9 @@ def list_document_sources() -> list[str]:
     return sorted(sources)
 
 
-def get_all_chunks_for_source(source: str) -> list[Document]:
+def get_all_chunks_for_source(source: str, vs: Chroma | None = None) -> list[Document]:
     """Return ALL chunks belonging to a specific source document, sorted by page."""
-    vs = get_vector_store()
+    vs = vs or get_vector_store()
     result = vs._collection.get(
         where={"source": source},
         include=["documents", "metadatas"],

@@ -45,6 +45,21 @@ class GraphState(TypedDict):
     answer: str
     sources: list[str]
     skip_generation: bool                   # When True, LLM nodes skip generation (for streaming)
+    agent_id: str | None                    # Selected agent (None = uploads store)
+    filters: dict | None                    # User-selected metadata filters for the agent
+
+
+def _agent_context(state: GraphState) -> tuple[str | None, dict | None]:
+    """Resolve (agent_id, chroma_where) from state. Returns (None, None) for
+    the default uploads store or when the agent is unknown."""
+    agent_id = state.get("agent_id")
+    if not agent_id:
+        return None, None
+    from src.agents import get_agent, build_chroma_where
+    agent = get_agent(agent_id)
+    if agent is None:
+        return None, None
+    return agent_id, build_chroma_where(agent, state.get("filters"))
 
 
 # ──────────────────────────────────────────────
@@ -190,9 +205,17 @@ def chitchat_node(state: GraphState) -> dict:
 # ──────────────────────────────────────────────
 
 def check_documents_node(state: GraphState) -> dict:
-    if get_document_count() == 0:
+    agent_id, _ = _agent_context(state)
+    if agent_id:
+        from src.agents import get_agent_vector_store
+        count = get_agent_vector_store(agent_id)._collection.count()
+        empty_msg = "מאגר הידע של הסוכן הזה עדיין ריק — יש להזין אליו מסמכים (scripts/ingest_govil.py)."
+    else:
+        count = get_document_count()
+        empty_msg = "No documents have been uploaded yet. Please upload documents first using the sidebar."
+    if count == 0:
         return {
-            "answer": "No documents have been uploaded yet. Please upload documents first using the sidebar.",
+            "answer": empty_msg,
             "plan": create_fallback_plan(state["query"]),
             "rewritten": create_fallback_rewrite(state["query"]),
             "full_doc_decision": create_fallback_full_doc_decision(),
@@ -209,7 +232,16 @@ def check_documents_node(state: GraphState) -> dict:
 def full_doc_detector_node(state: GraphState) -> dict:
     """Detect whether the query needs full document retrieval."""
     try:
-        available = list_document_sources()
+        agent_id, _ = _agent_context(state)
+        if agent_id:
+            from src.agents import get_agent_vector_store
+            available = list_document_sources(get_agent_vector_store(agent_id))
+            # Agent collections can hold tens of thousands of documents —
+            # too many to enumerate for the LLM detector. Skip full-doc mode.
+            if len(available) > 200:
+                return {"full_doc_decision": create_fallback_full_doc_decision()}
+        else:
+            available = list_document_sources()
         rewritten = state.get("rewritten")
         search_query = rewritten.rewritten_queries[0] if rewritten else state["query"]
 
@@ -233,8 +265,14 @@ def full_doc_retriever_node(state: GraphState) -> dict:
     decision = state["full_doc_decision"]
     all_docs = []
 
+    agent_id, _ = _agent_context(state)
+    agent_vs = None
+    if agent_id:
+        from src.agents import get_agent_vector_store
+        agent_vs = get_agent_vector_store(agent_id)
+
     for source in decision.target_sources:
-        chunks = get_all_chunks_for_source(source)
+        chunks = get_all_chunks_for_source(source, vs=agent_vs)
         all_docs.extend(chunks)
 
     return {
@@ -267,8 +305,10 @@ def retriever_node(state: GraphState) -> dict:
         reasoning=f"{'פירוק מהשכתוב' if is_complex else 'שאילתה ישירה'}: {len(queries)} שאילתות חיפוש.",
     )
 
+    agent_id, where = _agent_context(state)
+
     def _retrieve_one(sq: str) -> list[Document]:
-        docs = retrieve_for_query(sq)
+        docs = retrieve_for_query(sq, agent_id=agent_id, where=where)
         for doc in docs:
             doc.metadata["_sub_query"] = sq
         return docs
@@ -537,7 +577,8 @@ def _build_config(session_id: str | None, user_id: str | None, query: str) -> tu
     return config, handler
 
 
-def _build_initial_state(query: str, chat_history: list[dict] | None, skip_generation: bool = False) -> GraphState:
+def _build_initial_state(query: str, chat_history: list[dict] | None, skip_generation: bool = False,
+                         agent_id: str | None = None, filters: dict | None = None) -> GraphState:
     return {
         "query": query,
         "chat_history": chat_history or [],
@@ -549,6 +590,8 @@ def _build_initial_state(query: str, chat_history: list[dict] | None, skip_gener
         "answer": "",
         "sources": [],
         "skip_generation": skip_generation,
+        "agent_id": agent_id,
+        "filters": filters,
     }
 
 
@@ -569,11 +612,13 @@ def run_rag_pipeline(
     chat_history: list[dict] | None = None,
     session_id: str | None = None,
     user_id: str | None = None,
+    agent_id: str | None = None,
+    filters: dict | None = None,
 ) -> dict:
     """Main entry point for the LangGraph RAG pipeline (non-streaming)."""
     from src.observability import start_trace_span, flush_langfuse
 
-    initial_state = _build_initial_state(query, chat_history)
+    initial_state = _build_initial_state(query, chat_history, agent_id=agent_id, filters=filters)
     config, lf_handler = _build_config(session_id, user_id, query)
 
     try:
@@ -675,6 +720,8 @@ def stream_rag_pipeline(
     chat_history: list[dict] | None = None,
     session_id: str | None = None,
     user_id: str | None = None,
+    agent_id: str | None = None,
+    filters: dict | None = None,
 ):
     """
     Generator that streams pipeline progress AND LLM tokens.
@@ -685,7 +732,8 @@ def stream_rag_pipeline(
     """
     from src.observability import start_trace_span
 
-    initial_state = _build_initial_state(query, chat_history, skip_generation=True)
+    initial_state = _build_initial_state(query, chat_history, skip_generation=True,
+                                         agent_id=agent_id, filters=filters)
     config, lf_handler = _build_config(session_id, user_id, query)
 
     # LangGraph stream yields (node_name, state_update) dicts

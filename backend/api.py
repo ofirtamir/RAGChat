@@ -70,6 +70,8 @@ class ChatRequest(BaseModel):
     query: str
     chat_history: list[dict] = []
     session_id: str | None = None
+    agent_id: str | None = None
+    filters: dict | None = None
 
 
 class ChatResponse(BaseModel):
@@ -80,6 +82,26 @@ class ChatResponse(BaseModel):
     rewritten: dict | None
     full_doc_decision: dict | None
     plan: dict | None
+
+
+@app.get("/api/agents")
+async def get_agents(user_id: str = Depends(get_current_user_id)):
+    """List available knowledge-base agents with their filter schemas."""
+    from src.agents import list_agents, get_agent_vector_store
+    agents = []
+    for agent in list_agents():
+        try:
+            chunk_count = get_agent_vector_store(agent["id"])._collection.count()
+        except Exception:
+            chunk_count = 0
+        agents.append({
+            "id": agent["id"],
+            "name": agent["name"],
+            "description": agent.get("description", ""),
+            "filters": agent.get("filters", []),
+            "chunk_count": chunk_count,
+        })
+    return {"agents": agents}
 
 
 @app.post("/api/chat", response_model=ChatResponse)
@@ -95,6 +117,8 @@ async def chat(
             chat_history=request.chat_history,
             session_id=session_id,
             user_id=user_id,
+            agent_id=request.agent_id,
+            filters=request.filters,
         )
         return ChatResponse(
             answer=result["answer"],
@@ -124,6 +148,8 @@ def _run_stream_in_thread(
     session_id: str,
     user_id: str | None,
     q: Queue,
+    agent_id: str | None = None,
+    filters: dict | None = None,
 ):
     """Run the sync stream_rag_pipeline in a thread and push events to a queue."""
     try:
@@ -132,6 +158,8 @@ def _run_stream_in_thread(
             chat_history=chat_history,
             session_id=session_id,
             user_id=user_id,
+            agent_id=agent_id,
+            filters=filters,
         ):
             q.put(event)
         q.put(None)  # sentinel: done
@@ -161,6 +189,8 @@ async def chat_stream(
             session_id,
             user_id,
             q,
+            request.agent_id,
+            request.filters,
         )
 
         while True:

@@ -29,11 +29,40 @@ function authHeaders(token: string | undefined, extra?: HeadersInit): HeadersIni
   return headers
 }
 
+// ── Agents (knowledge-base per data source) ──────────────────────────────
+
+export interface AgentFilterField {
+  name: string
+  label: string
+  type: "choice" | "text" | "date"
+  values?: string[]
+}
+
+export interface AgentInfo {
+  id: string
+  name: string
+  description: string
+  filters: AgentFilterField[]
+  chunk_count: number
+}
+
+/** Filter values keyed by field name; dates are {from?, to?} (YYYY-MM-DD). */
+export type AgentFilters = Record<string, string | { from?: string; to?: string }>
+
+export async function getAgents(token: string | undefined): Promise<AgentInfo[]> {
+  const res = await fetch(`${API_BASE}/agents`, { headers: authHeaders(token) })
+  if (!res.ok) throw new Error("Failed to fetch agents")
+  const data = await res.json()
+  return data.agents ?? []
+}
+
 export async function sendMessage(
   query: string,
   chatHistory: { role: string; content: string }[],
   sessionId: string,
   token: string | undefined,
+  agentId?: string | null,
+  filters?: AgentFilters | null,
 ): Promise<ChatApiResponse> {
   const res = await fetch(`${API_BASE}/chat`, {
     method: "POST",
@@ -42,6 +71,8 @@ export async function sendMessage(
       query,
       chat_history: chatHistory,
       session_id: sessionId,
+      agent_id: agentId || null,
+      filters: filters || null,
     }),
   })
   if (!res.ok) {
@@ -62,6 +93,8 @@ export async function sendMessageStreaming(
   onStep: (step: ThinkingStep) => void,
   onToken: (token: string) => void,
   token: string | undefined,
+  agentId?: string | null,
+  filters?: AgentFilters | null,
 ): Promise<ChatApiResponse> {
   const res = await fetch(`${API_BASE}/chat/stream`, {
     method: "POST",
@@ -70,6 +103,8 @@ export async function sendMessageStreaming(
       query,
       chat_history: chatHistory,
       session_id: sessionId,
+      agent_id: agentId || null,
+      filters: filters || null,
     }),
   })
 

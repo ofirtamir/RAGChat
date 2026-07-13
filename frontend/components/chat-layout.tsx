@@ -19,7 +19,11 @@ import {
   getSession,
   upsertSession,
   deleteSession,
+  getAgents,
+  AgentInfo,
+  AgentFilters,
 } from "@/lib/api"
+import { AgentPanel } from "@/components/agent-panel"
 import { Send, Sparkles } from "lucide-react"
 import { cn } from "@/lib/utils"
 
@@ -87,6 +91,9 @@ export function ChatLayout() {
   const [totalChunks, setTotalChunks] = useState(0)
   const [isUploading, setIsUploading] = useState(false)
   const [uploadError, setUploadError] = useState<string>("")
+  const [agents, setAgents] = useState<AgentInfo[]>([])
+  const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null)
+  const [agentFilters, setAgentFilters] = useState<AgentFilters>({})
   const [thinkingSteps, setThinkingSteps] = useState<ThinkingStep[]>([])
   const [currentNode, setCurrentNode] = useState<string | undefined>(undefined)
   const [streamingAnswer, setStreamingAnswer] = useState("")
@@ -184,6 +191,14 @@ export function ChatLayout() {
 
   useEffect(() => { refreshDocuments() }, [refreshDocuments])
 
+  // Load available agents once authenticated
+  useEffect(() => {
+    if (!authToken) return
+    getAgents(authToken)
+      .then(setAgents)
+      .catch(err => console.error("Failed to load agents:", err))
+  }, [authToken])
+
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" })
   }, [activeSession?.messages, isLoading, thinkingSteps, streamingAnswer])
@@ -220,6 +235,16 @@ export function ChatLayout() {
     setIsStreaming(false)
     thinkingStepsRef.current = []
 
+    // Send only non-empty filter values
+    const cleanedFilters: AgentFilters = {}
+    for (const [name, value] of Object.entries(agentFilters)) {
+      if (typeof value === "string") {
+        if (value.trim()) cleanedFilters[name] = value.trim()
+      } else if (value && (value.from || value.to)) {
+        cleanedFilters[name] = value
+      }
+    }
+
     try {
       const result = await sendMessageStreaming(
         query,
@@ -241,6 +266,8 @@ export function ChatLayout() {
           setStreamingAnswer(prev => prev + token)
         },
         authToken,
+        selectedAgentId,
+        Object.keys(cleanedFilters).length > 0 ? cleanedFilters : null,
       )
 
       // Clear thinking/streaming state
@@ -438,6 +465,13 @@ export function ChatLayout() {
 
         {/* Input area */}
         <div className="border-t p-4 bg-background/95 backdrop-blur">
+          <AgentPanel
+            agents={agents}
+            selectedAgentId={selectedAgentId}
+            onSelectAgent={setSelectedAgentId}
+            filters={agentFilters}
+            onFiltersChange={setAgentFilters}
+          />
           <div className="max-w-3xl mx-auto">
             <div className="flex gap-2 items-end">
               <Input
