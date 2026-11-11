@@ -1,12 +1,15 @@
-"""Ingest govil-scraper extracted documents into an agent's Chroma collection.
+"""Ingest govil-scraper documents into an agent's Chroma collection.
 
 Reads data/<collector>/text/*.json produced by `python -m govil_scraper
-extract-text` (local pypdf extraction — no external OCR). Each document is
-chunked, every chunk carries the document's full metadata (committee, block,
-dates, ...), and chunks are upserted with deterministic ids so re-running
-only adds what's new.
+extract-text` for the record metadata, and re-parses each JSON's
+`source_pdf` with src/pdf_parser (Hebrew-aware, tables kept as Markdown).
+The JSON's own pypdf text is used only when the PDF is no longer on disk.
+Each page is chunked with tables kept whole (src/chunker), every chunk carries
+the document's full metadata (committee, block, dates, ...) plus its page,
+and chunks are upserted with deterministic ids so re-running only adds what's new.
 
-Usage:
+Runs on the indexing machine only (PyMuPDF is not installed on the server):
+    pip install -r scripts/requirements-indexing.txt
     python scripts/ingest_govil.py decisive_appraisal_decisions
     python scripts/ingest_govil.py <agent-id> --limit 10   (pilot runs)
 """
@@ -22,6 +25,7 @@ from langchain_core.documents import Document
 
 from src.agents import get_agent, get_agent_vector_store, _date_to_int
 from src.chunker import chunk_documents
+from src.pdf_parser import parse_pdf
 
 
 def _flatten_metadata(agent: dict, record_meta: dict) -> dict:
@@ -72,8 +76,12 @@ def main():
         if record_key in existing:
             skipped += 1
             continue
-        text = doc.get("text", "")
-        if len(text.strip()) < args.min_chars:
+        pdf_path = Path(doc.get("source_pdf", ""))
+        if pdf_path.is_file():
+            pages = [(p.number, p.markdown) for p in parse_pdf(pdf_path) if p.markdown]
+        else:
+            pages = [(None, doc.get("text", ""))]
+        if sum(len(text.strip()) for _, text in pages) < args.min_chars:
             short += 1
             print(f"  skipping (no text — scanned?): {path.name}")
             continue
@@ -86,7 +94,11 @@ def main():
             path.stem,
         ) or path.stem
 
-        chunks = chunk_documents([Document(page_content=text, metadata=meta)])
+        page_docs = [
+            Document(page_content=text, metadata=meta if page is None else {**meta, "page": page})
+            for page, text in pages
+        ]
+        chunks = chunk_documents(page_docs)
         ids = [f"{record_key}_{i}" for i in range(len(chunks))]
         vs.add_documents(chunks, ids=ids)
         ingested += 1

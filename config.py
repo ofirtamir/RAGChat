@@ -48,6 +48,11 @@ EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "models/gemini-embedding-001")
 # Chunking settings
 CHUNK_SIZE = 1000
 CHUNK_OVERLAP = 200
+# Markdown tables are kept whole up to this size; longer ones split by rows,
+# repeating the header row in every part.
+TABLE_CHUNK_MAX = 2000
+# Tail of the paragraph that introduces a table, prepended to its chunk(s).
+TABLE_CONTEXT_CHARS = 300
 
 # Retriever settings
 RETRIEVER_K = 10
