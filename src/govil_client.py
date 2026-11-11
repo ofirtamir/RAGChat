@@ -11,7 +11,6 @@ files needed. Mirrors the govil-scraper project's behavior:
   so locally-ingested and server-ingested chunks share ids and dedupe)
 """
 import hashlib
-import io
 import json
 import ssl
 import time
@@ -93,7 +92,6 @@ class GovilClient:
 
 
 def extract_pdf_text(pdf_bytes: bytes) -> str:
-    """Local text extraction with pypdf — no external OCR services."""
-    from pypdf import PdfReader
-    reader = PdfReader(io.BytesIO(pdf_bytes))
-    return "\n".join((page.extract_text() or "") for page in reader.pages).strip()
+    """Local Hebrew-aware extraction to Markdown (tables kept) — no external services."""
+    from src.pdf_parser import pdf_to_markdown
+    return pdf_to_markdown(pdf_bytes)

@@ -1,10 +1,12 @@
-"""Ingest govil-scraper extracted documents into an agent's Chroma collection.
+"""Ingest govil-scraper documents into an agent's Chroma collection.
 
 Reads data/<collector>/text/*.json produced by `python -m govil_scraper
-extract-text` (local pypdf extraction — no external OCR). Each document is
-chunked, every chunk carries the document's full metadata (committee, block,
-dates, ...), and chunks are upserted with deterministic ids so re-running
-only adds what's new.
+extract-text` for the record metadata, and re-parses each JSON's
+`source_pdf` with src/pdf_parser (Hebrew-aware, tables kept as Markdown).
+The JSON's own pypdf text is used only when the PDF is no longer on disk.
+Each document is chunked, every chunk carries the document's full metadata
+(committee, block, dates, ...), and chunks are upserted with deterministic
+ids so re-running only adds what's new.
 
 Usage:
     python scripts/ingest_govil.py decisive_appraisal_decisions
@@ -22,6 +24,7 @@ from langchain_core.documents import Document
 
 from src.agents import get_agent, get_agent_vector_store, _date_to_int
 from src.chunker import chunk_documents
+from src.pdf_parser import pdf_to_markdown
 
 
 def _flatten_metadata(agent: dict, record_meta: dict) -> dict:
@@ -72,7 +75,8 @@ def main():
         if record_key in existing:
             skipped += 1
             continue
-        text = doc.get("text", "")
+        pdf_path = Path(doc.get("source_pdf", ""))
+        text = pdf_to_markdown(pdf_path) if pdf_path.is_file() else doc.get("text", "")
         if len(text.strip()) < args.min_chars:
             short += 1
             print(f"  skipping (no text — scanned?): {path.name}")

@@ -115,8 +115,8 @@ async def ingest_agent_latest(
     user_id: str = Depends(get_current_user_id),
 ):
     """Pull the latest N documents for this agent straight from gov.il into
-    the server's vector store (search → download PDF → local pypdf text
-    extraction → embed). Runs as a background job; poll the status endpoint."""
+    the server's vector store (search → download PDF → local Hebrew-aware
+    parsing to Markdown → embed). Runs as a background job; poll the status endpoint."""
     from src.agent_ingest import start_ingest_latest
     limit = max(1, min(request.limit, 500))
     result = start_ingest_latest(agent_id, limit)
