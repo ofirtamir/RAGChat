@@ -65,6 +65,9 @@ def main():
             "type": "govil-scraper",
             "collector": args.collector,
             "scraper_root": str(scraper_root),
+            # API access for server-side ingestion (production has no local files)
+            "search_url": collector["search_url"],
+            "x_client_id": collector["x_client_id"],
         },
     }
 

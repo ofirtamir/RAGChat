@@ -1,10 +1,10 @@
 "use client"
 
-import { useState } from "react"
-import { AgentInfo, AgentFilters } from "@/lib/api"
+import { useEffect, useRef, useState } from "react"
+import { AgentInfo, AgentFilters, startAgentIngest, getIngestStatus, IngestStatus } from "@/lib/api"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
-import { Bot, SlidersHorizontal, X } from "lucide-react"
+import { Bot, SlidersHorizontal, X, DownloadCloud, Loader2 } from "lucide-react"
 import { cn } from "@/lib/utils"
 
 interface AgentPanelProps {
@@ -13,6 +13,8 @@ interface AgentPanelProps {
   onSelectAgent: (id: string | null) => void
   filters: AgentFilters
   onFiltersChange: (filters: AgentFilters) => void
+  authToken?: string
+  onAgentsChanged?: () => void
 }
 
 function countActiveFilters(filters: AgentFilters): number {
@@ -27,10 +29,41 @@ export function AgentPanel({
   onSelectAgent,
   filters,
   onFiltersChange,
+  authToken,
+  onAgentsChanged,
 }: AgentPanelProps) {
   const [showFilters, setShowFilters] = useState(false)
+  const [ingest, setIngest] = useState<IngestStatus | null>(null)
+  const [ingestError, setIngestError] = useState("")
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const agent = agents.find(a => a.id === selectedAgentId) ?? null
   const activeCount = countActiveFilters(filters)
+
+  // Poll ingest status while a job runs
+  useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current) }, [])
+
+  const handleIngest = async () => {
+    if (!agent || !authToken) return
+    setIngestError("")
+    try {
+      await startAgentIngest(agent.id, 100, authToken)
+    } catch (e) {
+      setIngestError(e instanceof Error ? e.message : "שגיאה")
+      return
+    }
+    setIngest({ running: true, agent_id: agent.id, total: 0, done: 0, ingested: 0, skipped: 0, failed: 0, error: null })
+    pollRef.current = setInterval(async () => {
+      try {
+        const s = await getIngestStatus(authToken)
+        setIngest(s)
+        if (!s.running) {
+          if (pollRef.current) clearInterval(pollRef.current)
+          pollRef.current = null
+          onAgentsChanged?.()
+        }
+      } catch {}
+    }, 2500)
+  }
 
   if (agents.length === 0) return null
 
@@ -95,7 +128,47 @@ export function AgentPanel({
             <X className="w-3.5 h-3.5" />
           </Button>
         )}
+
+        {agent && (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={handleIngest}
+            disabled={Boolean(ingest?.running)}
+            className="h-9 gap-1.5 rounded-lg"
+            title="משיכת 100 המסמכים האחרונים מהאתר אל מאגר הסוכן"
+          >
+            {ingest?.running ? (
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            ) : (
+              <DownloadCloud className="w-3.5 h-3.5" />
+            )}
+            עדכון מאגר
+          </Button>
+        )}
       </div>
+
+      {/* Ingest progress / result */}
+      {agent && (ingest || ingestError) && (
+        <div className="mt-1.5 text-xs text-muted-foreground" dir="rtl">
+          {ingestError ? (
+            <span className="text-red-500">שגיאה: {ingestError}</span>
+          ) : ingest?.running ? (
+            <span>
+              מושך מסמכים מהאתר... {ingest.done}/{ingest.total || "?"}
+              {ingest.ingested > 0 && ` · נוספו ${ingest.ingested}`}
+              {ingest.skipped > 0 && ` · דולגו ${ingest.skipped} (קיימים/סרוקים)`}
+            </span>
+          ) : ingest ? (
+            <span className="text-emerald-600">
+              ✓ העדכון הסתיים — נוספו {ingest.ingested}, דולגו {ingest.skipped}
+              {ingest.failed > 0 && `, נכשלו ${ingest.failed}`}
+              {ingest.error && ` · שגיאה: ${ingest.error}`}
+            </span>
+          ) : null}
+        </div>
+      )}
 
       {/* Filters panel */}
       {agent && showFilters && (

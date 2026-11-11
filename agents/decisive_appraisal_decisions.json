@@ -269,6 +269,8 @@
   "source": {
     "type": "govil-scraper",
     "collector": "decisive_appraisal_decisions",
-    "scraper_root": "C:\\Users\\User\\Documents\\GitHub\\govil-scraper"
+    "scraper_root": "C:\\Users\\User\\Documents\\GitHub\\govil-scraper",
+    "search_url": "https://pub-justice.openapi.gov.il/pub/moj/portal/rest/searchpredefinedapi/v1/SearchPredefinedApi/DecisiveAppraiser/SearchDecisions",
+    "x_client_id": "149a5bad-edde-49a6-9fb9-188bd17d4788"
   }
 }
