@@ -1,0 +1,4 @@
+# Local indexing only (scripts/ingest_govil.py). Not installed on the server:
+# PyMuPDF is AGPL-3.0, so PDF parsing runs on the indexing machine, never in the backend.
+-r ../requirements.txt
+pymupdf>=1.24.0
