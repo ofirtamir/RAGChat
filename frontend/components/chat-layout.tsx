@@ -471,6 +471,10 @@ export function ChatLayout() {
             onSelectAgent={setSelectedAgentId}
             filters={agentFilters}
             onFiltersChange={setAgentFilters}
+            authToken={authToken}
+            onAgentsChanged={() => {
+              if (authToken) getAgents(authToken).then(setAgents).catch(() => {})
+            }}
           />
           <div className="max-w-3xl mx-auto">
             <div className="flex gap-2 items-end">

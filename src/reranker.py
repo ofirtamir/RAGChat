@@ -35,6 +35,25 @@ Return ONLY a JSON array of scores in the same order as the chunks.
 Example for 3 chunks: [8, 3, 6]"""
 
 
+def _response_text(content) -> str:
+    """Normalize an LLM response's content to plain text.
+
+    Gemini sometimes returns content as a list of parts (strings or
+    {"type": "text", "text": ...} dicts) instead of a single string.
+    """
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for part in content:
+            if isinstance(part, str):
+                parts.append(part)
+            elif isinstance(part, dict):
+                parts.append(part.get("text", ""))
+        return "".join(parts)
+    return str(content)
+
+
 def _get_reranker_llm() -> ChatGoogleGenerativeAI:
     return ChatGoogleGenerativeAI(
         model=LLM_MODEL,
@@ -80,7 +99,7 @@ def rerank_documents(
         prompt_template = load_prompt("reranker-system", fallback=RERANK_PROMPT)
         prompt = prompt_template.format(query=query, chunks=chunks_str)
         response = llm.invoke(prompt)
-        content = response.content.strip()
+        content = _response_text(response.content).strip()
 
         # Parse scores — handle markdown fences if present
         if "```" in content:

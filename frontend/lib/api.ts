@@ -56,6 +56,40 @@ export async function getAgents(token: string | undefined): Promise<AgentInfo[]>
   return data.agents ?? []
 }
 
+export interface IngestStatus {
+  running: boolean
+  agent_id: string | null
+  total: number
+  done: number
+  ingested: number
+  skipped: number
+  failed: number
+  error: string | null
+}
+
+/** Ask the server to pull the latest N documents for this agent from gov.il. */
+export async function startAgentIngest(
+  agentId: string,
+  limit: number,
+  token: string | undefined,
+): Promise<void> {
+  const res = await fetch(`${API_BASE}/agents/${encodeURIComponent(agentId)}/ingest`, {
+    method: "POST",
+    headers: authHeaders(token, { "Content-Type": "application/json" }),
+    body: JSON.stringify({ limit }),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: "Ingest failed" }))
+    throw new Error(err.detail || "Ingest failed")
+  }
+}
+
+export async function getIngestStatus(token: string | undefined): Promise<IngestStatus> {
+  const res = await fetch(`${API_BASE}/agents/ingest/status`, { headers: authHeaders(token) })
+  if (!res.ok) throw new Error("Failed to fetch ingest status")
+  return res.json()
+}
+
 export async function sendMessage(
   query: string,
   chatHistory: { role: string; content: string }[],

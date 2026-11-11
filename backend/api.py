@@ -104,6 +104,33 @@ async def get_agents(user_id: str = Depends(get_current_user_id)):
     return {"agents": agents}
 
 
+class IngestRequest(BaseModel):
+    limit: int = 100
+
+
+@app.post("/api/agents/{agent_id}/ingest")
+async def ingest_agent_latest(
+    agent_id: str,
+    request: IngestRequest,
+    user_id: str = Depends(get_current_user_id),
+):
+    """Pull the latest N documents for this agent straight from gov.il into
+    the server's vector store (search → download PDF → local pypdf text
+    extraction → embed). Runs as a background job; poll the status endpoint."""
+    from src.agent_ingest import start_ingest_latest
+    limit = max(1, min(request.limit, 500))
+    result = start_ingest_latest(agent_id, limit)
+    if "error" in result:
+        raise HTTPException(status_code=409, detail=result["error"])
+    return result
+
+
+@app.get("/api/agents/ingest/status")
+async def ingest_status(user_id: str = Depends(get_current_user_id)):
+    from src.agent_ingest import get_job_status
+    return get_job_status()
+
+
 @app.post("/api/chat", response_model=ChatResponse)
 async def chat(
     request: ChatRequest,
