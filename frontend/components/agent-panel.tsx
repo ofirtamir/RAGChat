@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react"
 import { AgentInfo, AgentFilters, startAgentIngest, getIngestStatus, IngestStatus } from "@/lib/api"
+import { useMe } from "@/lib/use-me"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
 import { Bot, SlidersHorizontal, X, DownloadCloud, Loader2 } from "lucide-react"
@@ -32,6 +33,7 @@ export function AgentPanel({
   authToken,
   onAgentsChanged,
 }: AgentPanelProps) {
+  const me = useMe()
   const [showFilters, setShowFilters] = useState(false)
   const [ingest, setIngest] = useState<IngestStatus | null>(null)
   const [ingestError, setIngestError] = useState("")
@@ -129,7 +131,7 @@ export function AgentPanel({
           </Button>
         )}
 
-        {agent && (
+        {agent && me?.is_admin && (
           <Button
             type="button"
             variant="outline"
