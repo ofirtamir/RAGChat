@@ -1,5 +1,6 @@
 "use client"
 
+import Link from "next/link"
 import { useSession, signOut } from "next-auth/react"
 import {
   DropdownMenu,
@@ -10,10 +11,12 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
-import { LogOut, User as UserIcon } from "lucide-react"
+import { LogOut, ShieldCheck, User as UserIcon } from "lucide-react"
+import { useMe } from "@/lib/use-me"
 
 export function UserMenu() {
   const { data: session, status } = useSession()
+  const me = useMe()
 
   if (status === "loading") {
     return <div className="h-9 w-9 rounded-full bg-muted animate-pulse" />
@@ -51,6 +54,14 @@ export function UserMenu() {
           <span className="text-xs truncate">{session.user.email}</span>
         </DropdownMenuLabel>
         <DropdownMenuSeparator />
+        {me?.is_admin && (
+          <DropdownMenuItem asChild className="cursor-pointer">
+            <Link href="/admin">
+              <ShieldCheck className="w-4 h-4 ms-2" />
+              ניהול המערכת
+            </Link>
+          </DropdownMenuItem>
+        )}
         <DropdownMenuItem
           onClick={() => signOut({ callbackUrl: "/login" })}
           className="text-destructive focus:text-destructive cursor-pointer"

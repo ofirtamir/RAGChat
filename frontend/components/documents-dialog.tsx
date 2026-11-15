@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { DocumentInfo } from "@/types/chat"
 import { FileText, Database, Trash2, Upload } from "lucide-react"
+import { useMe } from "@/lib/use-me"
 
 interface DocumentsDialogProps {
   open: boolean
@@ -52,6 +53,7 @@ export function DocumentsDialog({
   isUploading,
   uploadError,
 }: DocumentsDialogProps) {
+  const me = useMe()
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || [])
     if (files.length > 0) onUpload(files)
@@ -130,7 +132,7 @@ export function DocumentsDialog({
             </Button>
           </label>
 
-          {totalChunks > 0 && (
+          {totalChunks > 0 && me?.is_admin && (
             <Button
               variant="destructive"
               size="sm"
