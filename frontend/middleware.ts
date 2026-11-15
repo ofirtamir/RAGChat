@@ -9,9 +9,12 @@ import { NextResponse } from "next/server"
  * does NOT redirect. We have to handle the redirect explicitly.
  */
 export default auth((req) => {
-  if (!req.auth) {
+  // A session whose Google ID token could not be renewed (`error`) cannot call
+  // the backend, so it is treated like no session at all.
+  if (!req.auth || req.auth.error) {
     const url = new URL("/login", req.nextUrl.origin)
     url.searchParams.set("callbackUrl", req.nextUrl.pathname + req.nextUrl.search)
+    if (req.auth?.error) url.searchParams.set("reason", "expired")
     return NextResponse.redirect(url)
   }
   return NextResponse.next()

@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button"
 function LoginContent() {
   const params = useSearchParams()
   const callbackUrl = params.get("callbackUrl") || "/"
+  const sessionExpired = params.get("reason") === "expired"
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-sky-50 to-cyan-50 dark:from-slate-950 dark:to-slate-900" dir="rtl">
@@ -31,6 +32,12 @@ function LoginContent() {
             <br />חוות דעת ודוחות הערכה
           </p>
         </div>
+
+        {sessionExpired && (
+          <p role="status" className="text-sm text-center text-amber-700 dark:text-amber-400">
+            פג תוקף ההתחברות. יש להתחבר שוב כדי להמשיך.
+          </p>
+        )}
 
         <Button
           onClick={() => signIn("google", { callbackUrl })}

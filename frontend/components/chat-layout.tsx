@@ -23,6 +23,7 @@ import {
   AgentInfo,
   AgentFilters,
 } from "@/lib/api"
+import { redirectToSignIn } from "@/lib/auth-redirect"
 import { AgentPanel } from "@/components/agent-panel"
 import { Send, Sparkles } from "lucide-react"
 import { cn } from "@/lib/utils"
@@ -101,6 +102,13 @@ export function ChatLayout() {
   const thinkingStepsRef = useRef<ThinkingStep[]>([])
   const bottomRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
+
+  // The Google ID token expired and could not be renewed: the backend would
+  // reject every call, so send the user through sign-in again.
+  const authError = authSession?.error
+  useEffect(() => {
+    if (authError) redirectToSignIn()
+  }, [authError])
 
   // Init active session
   useEffect(() => {
