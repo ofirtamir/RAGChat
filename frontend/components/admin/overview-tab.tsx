@@ -3,8 +3,8 @@
 import { useCallback, useEffect, useState } from "react"
 import { getOverview, Overview } from "@/lib/admin-api"
 import {
-  DailyBars, DOC_STATUS, DOC_STATUS_ORDER, ErrorNote, monthProjection, num, Pill, relativeTime,
-  StatCard, usd,
+  DailyBars, DOC_STATUS, DOC_STATUS_ORDER, ErrorNote, IndexCostSummary, monthProjection, num, Pill,
+  relativeTime, StatCard, usd,
 } from "./shared"
 
 export function OverviewTab({ token, onNavigate }: {
@@ -95,6 +95,11 @@ export function OverviewTab({ token, onNavigate }: {
           </div>
         </div>
       </div>
+
+      {libraries.map(lib => lib.index_cost.documents > 0 && (
+        <IndexCostSummary key={`cost-${lib.agent_id}`} cost={lib.index_cost}
+          catalogTotal={lib.catalog_total} indexed={lib.counts.indexed} />
+      ))}
 
       {libraries.map(lib => (
         <button

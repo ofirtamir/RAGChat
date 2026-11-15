@@ -12,7 +12,7 @@ from langchain_core.output_parsers import JsonOutputParser
 from langchain_core.messages import HumanMessage, AIMessage
 from pydantic import BaseModel, Field
 
-from config import GOOGLE_API_KEY, LLM_MODEL, LLM_TIMEOUT_SHORT, LLM_MAX_RETRIES
+from src.llm import fast_llm
 from src.prompt_store import load_prompt
 
 
@@ -84,13 +84,7 @@ Return ONLY the JSON object, no markdown fences or extra text."""
 
 
 def _get_analyzer_llm() -> ChatGoogleGenerativeAI:
-    return ChatGoogleGenerativeAI(
-        model=LLM_MODEL,
-        google_api_key=GOOGLE_API_KEY,
-        temperature=0,
-        timeout=LLM_TIMEOUT_SHORT,
-        max_retries=LLM_MAX_RETRIES,
-    )
+    return fast_llm()
 
 
 def analyze_query(query: str, chat_history: list[dict] | None = None) -> QueryAnalysis:

@@ -38,7 +38,7 @@ _FIELD_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 _LIST_COLUMNS = (
     "agent_id, record_key, title, meta, sort_date, status, auto_index, pages, tables, "
-    "flagged_tables, chars, chunks, error, updated_at, parsed_at, indexed_at"
+    "flagged_tables, chars, chunks, embed_tokens, index_cost_usd, error, updated_at, parsed_at, indexed_at"
 )
 
 
@@ -84,6 +84,16 @@ def _init_db() -> None:
             );
             """
         )
+    _migrate()
+
+
+def _migrate() -> None:
+    """Columns added after the first release; ALTER TABLE keeps existing rows."""
+    with _connect() as conn:
+        have = {row[1] for row in conn.execute("PRAGMA table_info(documents)")}
+        for column, ddl in (("embed_tokens", "INTEGER"), ("index_cost_usd", "REAL")):
+            if column not in have:
+                conn.execute(f"ALTER TABLE documents ADD COLUMN {column} {ddl}")
 
 
 _init_db()
@@ -203,17 +213,29 @@ def status_counts(agent_id: str) -> dict:
     with _lock, _connect() as conn:
         rows = conn.execute(
             "SELECT status, COUNT(*) AS n, COALESCE(SUM(chunks), 0) AS chunks, "
-            "COALESCE(SUM(flagged_tables), 0) AS flagged FROM documents WHERE agent_id = ? GROUP BY status",
+            "COALESCE(SUM(flagged_tables), 0) AS flagged, COUNT(index_cost_usd) AS costed, "
+            "COALESCE(SUM(index_cost_usd), 0) AS cost, COALESCE(SUM(embed_tokens), 0) AS tokens "
+            "FROM documents WHERE agent_id = ? GROUP BY status",
             (agent_id,),
         ).fetchall()
     counts = {s: 0 for s in STATUSES}
-    chunks = flagged = 0
+    chunks = flagged = costed = tokens = 0
+    cost = 0.0
     for r in rows:
         counts[r["status"]] = r["n"]
-        chunks += r["chunks"] if r["status"] == "indexed" else 0
         flagged += r["flagged"]
-    return {"counts": counts, "catalog_total": sum(counts.values()), "indexed_chunks": chunks,
-            "flagged_tables": flagged}
+        if r["status"] == "indexed":
+            chunks += r["chunks"]
+            costed += r["costed"]
+            cost += r["cost"]
+            tokens += r["tokens"]
+    total = sum(counts.values())
+    avg = cost / costed if costed else 0.0
+    return {"counts": counts, "catalog_total": total, "indexed_chunks": chunks,
+            "flagged_tables": flagged,
+            "index_cost": {"total_usd": cost, "tokens": tokens, "documents": costed,
+                           "avg_per_document_usd": avg,
+                           "projected_catalog_usd": avg * total}}
 
 
 def get_document(agent_id: str, key: str, with_parsed: bool = True) -> dict | None:
@@ -283,12 +305,15 @@ def transition(agent: dict, to_status: str, from_statuses: tuple[str, ...],
 
 
 def set_status(agent_id: str, key: str, status: str, error: str | None = None,
-               chunks: int | None = None) -> None:
+               chunks: int | None = None, embed_tokens: int | None = None,
+               index_cost_usd: float | None = None) -> None:
     now = _now()
     sets, params = ["status = ?", "error = ?", "updated_at = ?"], [status, error, now]
-    if chunks is not None:
-        sets.append("chunks = ?")
-        params.append(chunks)
+    for column, value in (("chunks", chunks), ("embed_tokens", embed_tokens),
+                          ("index_cost_usd", index_cost_usd)):
+        if value is not None:
+            sets.append(f"{column} = ?")
+            params.append(value)
     if status == "indexed":
         sets.append("indexed_at = ?")
         params.append(now)

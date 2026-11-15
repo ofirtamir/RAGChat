@@ -8,7 +8,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Button } from "@/components/ui/button"
 import { getLibraryDoc, LibraryActionName, LibraryDocDetail } from "@/lib/admin-api"
 import { cn } from "@/lib/utils"
-import { DOC_STATUS, ErrorNote, num, Pill, shortDate } from "./shared"
+import { DOC_STATUS, ErrorNote, num, Pill, shortDate, usdPrecise } from "./shared"
 
 /** Shows what the parser produced for one document, page by page, next to its details. */
 export function DocumentViewer({ agentId, recordKey, token, onClose, onAction }: {
@@ -68,6 +68,9 @@ export function DocumentViewer({ agentId, recordKey, token, onClose, onAction }:
                   )}
                   {doc.chars != null && <span>· {num(doc.chars)} תווים</span>}
                   {doc.chunks != null && <span>· {num(doc.chunks)} קטעים באינדקס</span>}
+                  {doc.index_cost_usd != null && (
+                    <span>· עלות אינדוקס {usdPrecise(doc.index_cost_usd)} ({num(doc.embed_tokens)} טוקנים)</span>
+                  )}
                   {doc.parsed_at && <span>· פורסר {shortDate(doc.parsed_at)}</span>}
                 </>
               )}

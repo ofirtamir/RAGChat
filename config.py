@@ -25,9 +25,27 @@ LANGFUSE_PUBLIC_KEY = os.getenv("LANGFUSE_PUBLIC_KEY")
 LANGFUSE_HOST = os.getenv("LANGFUSE_HOST", "https://cloud.langfuse.com")
 LANGFUSE_ENABLED = bool(LANGFUSE_SECRET_KEY and LANGFUSE_PUBLIC_KEY)
 
-# LLM settings
-# Allow overriding via environment variables to match available models per API key/project.
-LLM_MODEL = os.getenv("LLM_MODEL", "gemini-3.5-flash")
+# LLM settings (override per deployment with env vars)
+# Two tiers, chosen for cost (Gemini paid tier, USD per 1M tokens, Nov 2026):
+#   gemini-3.1-flash-lite  in $0.25 / out $1.50 — writes the answers
+#   gemini-2.5-flash-lite  in $0.10 / out $0.40 — small JSON decisions (routing, full-doc check)
+# The previous default, gemini-3.5-flash, is billed as gemini-3.6-flash: in $0.75 / out $3.75
+# until 2026-12-31 and twice that from 2027-01-01.
+LLM_MODEL = os.getenv("LLM_MODEL", "gemini-3.1-flash-lite")
+LLM_MODEL_FAST = os.getenv("LLM_MODEL_FAST", "gemini-2.5-flash-lite")
+# Thinking tokens are billed as output. minimal | low | medium | high
+LLM_THINKING_LEVEL = os.getenv("LLM_THINKING_LEVEL", "low")
+
+# USD per 1M tokens (input, output incl. thinking), used for the admin console's
+# cost estimates. Unknown models fall back to the prices in the admin settings.
+MODEL_PRICES = {
+    "gemini-2.5-flash-lite": (0.10, 0.40),
+    "gemini-3.1-flash-lite": (0.25, 1.50),
+    "gemini-3.5-flash-lite": (0.30, 2.50),
+    "gemini-3.5-flash": (0.75, 3.75),
+    "gemini-3.6-flash": (0.75, 3.75),
+    "gemini-3.8-flash": (0.75, 3.75),
+}
 LLM_TEMPERATURE = 0.3
 LLM_MAX_OUTPUT_TOKENS = int(os.getenv("LLM_MAX_OUTPUT_TOKENS", "65536"))
 

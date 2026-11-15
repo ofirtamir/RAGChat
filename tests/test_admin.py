@@ -268,8 +268,48 @@ def test_failed_indexing_keeps_the_parsed_text_and_can_be_retried(monkeypatch):
     doc = library_store.get_document("test_agent", key)
     assert doc["status"] == "parsed" and "Gemini" in doc["error"] and doc["parsed_pages"]
 
-    monkeypatch.setattr(library_index, "index_document", lambda agent, key: 7)
+    monkeypatch.setattr(library_index, "index_document", lambda agent, key: {
+        "chunks": 7, "tokens": 20_000, "cost_usd": 0.003, "exact": True})
     library_store.transition(AGENT, "indexing", ("parsed", "indexed"), keys=[key])
     library_index.process("test_agent", key)
     doc = library_store.get_document("test_agent", key)
     assert (doc["status"], doc["chunks"], doc["error"]) == ("indexed", 7, None)
+    assert (doc["embed_tokens"], doc["index_cost_usd"]) == (20_000, 0.003)
+    cost = library_store.status_counts("test_agent")["index_cost"]
+    assert cost["documents"] == 1 and cost["total_usd"] == pytest.approx(0.003)
+    assert cost["projected_catalog_usd"] == pytest.approx(0.003)  # one document in this catalog
+
+
+def test_indexing_cost_uses_gemini_token_count(monkeypatch):
+    import src.agents
+    import src.embeddings
+
+    library_store.upsert_catalog(AGENT, [record(1)])
+    key = library_store.search(AGENT)["documents"][0]["record_key"]
+    library_store.save_parsed("test_agent", key, [{"number": 0, "markdown": "טקסט " * 40}], 0, [])
+
+    class Store:
+        def add_documents(self, chunks, ids):
+            self.ids = ids
+
+    store = Store()
+    monkeypatch.setattr(src.agents, "get_agent_vector_store", lambda agent_id: store)
+    monkeypatch.setattr(library_index, "remove_from_index", lambda agent_id, key: None)
+    monkeypatch.setattr(src.embeddings, "count_embedding_tokens", lambda texts: (123_456, True))
+    admin_store.update_settings({"price_embedding_per_m": 0.15})
+
+    result = library_index.index_document(AGENT, key)
+    assert result == {"chunks": len(store.ids), "tokens": 123_456,
+                      "cost_usd": pytest.approx(123_456 * 0.15 / 1_000_000), "exact": True}
+    assert admin_store.cost_this_month() == pytest.approx(123_456 * 0.15 / 1_000_000)
+
+
+def test_token_count_falls_back_to_an_estimate(monkeypatch):
+    import src.embeddings
+
+    def offline(*args, **kwargs):
+        raise ConnectionError("no network")
+
+    monkeypatch.setattr(src.embeddings.requests, "post", offline)
+    tokens, exact = src.embeddings.count_embedding_tokens(["א" * 160])
+    assert (tokens, exact) == (100, False)

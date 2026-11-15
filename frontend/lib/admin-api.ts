@@ -112,11 +112,20 @@ export const patchUser = (
 export type DocStatus =
   | "catalog" | "queued" | "processing" | "parsed" | "indexing" | "indexed" | "no_text" | "failed"
 
+export interface IndexCost {
+  total_usd: number
+  tokens: number
+  documents: number
+  avg_per_document_usd: number
+  projected_catalog_usd: number
+}
+
 export interface LibraryCounts {
   counts: Record<DocStatus, number>
   catalog_total: number
   indexed_chunks: number
   flagged_tables: number
+  index_cost: IndexCost
 }
 
 export interface WorkerStatus {
@@ -151,6 +160,8 @@ export interface LibraryDoc {
   flagged_tables: number | null
   chars: number | null
   chunks: number | null
+  embed_tokens: number | null
+  index_cost_usd: number | null
   error: string | null
   updated_at: string
   parsed_at: string | null

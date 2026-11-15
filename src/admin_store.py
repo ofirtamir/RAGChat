@@ -27,8 +27,8 @@ DEFAULT_SETTINGS = {
     "require_approval": True,      # new users wait for the admin before they can ask
     "default_daily_limit": 40,     # questions per user per day (0 = unlimited)
     "monthly_budget_usd": 0.0,     # stop answering non-admins above this (0 = off)
-    "price_input_per_m": 0.30,     # USD per 1M input tokens
-    "price_output_per_m": 2.50,    # USD per 1M output tokens (incl. thinking)
+    "price_input_per_m": 0.25,     # USD per 1M input tokens, for models not in config.MODEL_PRICES
+    "price_output_per_m": 1.50,    # USD per 1M output tokens (incl. thinking), same fallback
     "price_embedding_per_m": 0.15, # USD per 1M embedded tokens
 }
 
