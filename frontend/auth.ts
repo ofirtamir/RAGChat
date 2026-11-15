@@ -18,7 +18,14 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
   // the OAuth callback URL can resolve to an internal Vercel hostname and trip
   // the DNS_HOSTNAME_RESOLVED_PRIVATE block.
   trustHost: true,
-  providers: [Google],
+  providers: [
+    Google({
+      // Always show Google's account chooser. Without it Google silently
+      // signs in with whichever account the browser is already using, so a
+      // person with two Google accounts can never pick the other one.
+      authorization: { params: { prompt: "select_account" } },
+    }),
+  ],
   callbacks: {
     // Persist the Google `sub` (used as Langfuse user_id) AND the raw Google
     // ID token (forwarded to the FastAPI backend as a Bearer token, where it
