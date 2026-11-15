@@ -3,9 +3,6 @@
 import { useState, useRef, useEffect, useCallback } from "react"
 import { useSession } from "next-auth/react"
 import { v4 as uuidv4 } from "uuid"
-import { ScrollArea } from "@/components/ui/scroll-area"
-import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
 import { Sidebar } from "@/components/sidebar"
 import { MessageBubble } from "@/components/message-bubble"
 import { ThinkingIndicator } from "@/components/thinking-indicator"
@@ -26,8 +23,7 @@ import {
 import { AgentPanel } from "@/components/agent-panel"
 import { AccessGate } from "@/components/access-gate"
 import { useMe } from "@/lib/use-me"
-import { Send, Sparkles } from "lucide-react"
-import { cn } from "@/lib/utils"
+import { ChatTopBar, Greeting, SendButton, Suggestions, useAutoGrow, useSidebarState } from "@/components/chat-chrome"
 
 const LOCAL_STORAGE_KEY = "ragchat_sessions"
 const LOCAL_STORAGE_ACTIVE_KEY = "ragchat_active_session"
@@ -101,9 +97,11 @@ export function ChatLayout() {
   const [currentNode, setCurrentNode] = useState<string | undefined>(undefined)
   const [streamingAnswer, setStreamingAnswer] = useState("")
   const [isStreaming, setIsStreaming] = useState(false)
+  const sidebar = useSidebarState()
   const thinkingStepsRef = useRef<ThinkingStep[]>([])
   const bottomRef = useRef<HTMLDivElement>(null)
-  const inputRef = useRef<HTMLInputElement>(null)
+  const inputRef = useRef<HTMLTextAreaElement>(null)
+  useAutoGrow(inputRef, input)
 
   // Init active session
   useEffect(() => {
@@ -384,14 +382,44 @@ export function ChatLayout() {
   }
 
   const isEmpty = !activeSession?.messages.length
+  const firstName = authSession?.user?.name?.trim().split(/\s+/)[0]
 
   if (me && !me.allowed) return <AccessGate me={me} />
 
+  const composer = (
+    <AgentPanel
+      agents={agents}
+      selectedAgentId={selectedAgentId}
+      onSelectAgent={setSelectedAgentId}
+      filters={agentFilters}
+      onFiltersChange={setAgentFilters}
+      authToken={authToken}
+      onAgentsChanged={() => {
+        if (authToken) getAgents(authToken).then(setAgents).catch(() => {})
+      }}
+      action={<SendButton onClick={handleSend} disabled={!input.trim() || isLoading} loading={isLoading} />}
+    >
+      <textarea
+        ref={inputRef}
+        rows={1}
+        dir="rtl"
+        value={input}
+        onChange={e => setInput(e.target.value)}
+        onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); handleSend() } }}
+        placeholder="שאל שאלה על מסמכי השמאות"
+        aria-label="שאלה"
+        className="scrollbar-thin block max-h-52 w-full resize-none bg-transparent px-2 py-1.5 text-base leading-6 outline-none placeholder:text-muted-foreground disabled:opacity-60"
+        disabled={isLoading}
+      />
+    </AgentPanel>
+  )
+
   return (
-    <div className="flex h-screen w-full overflow-hidden bg-background" dir="rtl">
+    <div className="flex h-dvh w-full overflow-hidden bg-background" dir="rtl">
       {/* Sidebar first = RIGHT side in RTL */}
       <Sidebar
-        sessions={sessions.map(s => ({ id: s.id, title: s.title }))}
+        // Like ChatGPT, the blank "new chat" is not listed until it has a message.
+        sessions={sessions.filter(s => s.messages.length > 0).map(s => ({ id: s.id, title: s.title }))}
         activeSessionId={activeId}
         onNewChat={handleNewChat}
         onSelectSession={setActiveId}
@@ -402,56 +430,25 @@ export function ChatLayout() {
         onClearDocuments={handleClear}
         isUploading={isUploading}
         uploadError={uploadError}
+        open={sidebar.open}
+        mobileOpen={sidebar.mobileOpen}
+        onClose={sidebar.close}
       />
 
       {/* Main chat area = LEFT side in RTL */}
-      <main className="flex-1 flex flex-col min-w-0">
-        {/* Messages */}
-        <ScrollArea className="flex-1 px-4 py-4">
-          {isEmpty ? (
-            <div className="h-full flex flex-col items-center justify-center gap-4 text-center py-24">
-              <div className="flex gap-2">
-                {[0,1,2,3,4].map(i => (
-                  <span
-                    key={i}
-                    className="w-3 h-3 rounded-full bg-sky-400 animate-thinking"
-                    style={{ animationDelay: `${i * 0.16}s` }}
-                  />
-                ))}
-              </div>
-              <h2 dir="rtl" className="text-2xl font-bold text-foreground">👋 שלום, שמאי</h2>
-              <p dir="rtl" className="text-muted-foreground max-w-sm text-sm leading-relaxed">
-                מערכת חיפוש חכמה במסמכי שמאות, חוות דעת ודוחות הערכה.
-                <br />העלה קבצים מהסיידבר ושאל כל שאלה על הנכסים.
-              </p>
-              <div className="flex gap-2 flex-wrap justify-center mt-2">
-                {[
-                  "מה שווי הנכס לפי חוות הדעת?",
-                  "אילו פגמים נמצאו בנכס?",
-                  "מהי שיטת ההשוואה ששימשה?",
-                  "מה עלות הבנייה למ\"ר?",
-                  "השווה בין שתי שומות",
-                ].map(q => (
-                  <button
-                    key={q}
-                    dir="rtl"
-                    onClick={() => { setInput(q); inputRef.current?.focus() }}
-                    className="text-xs px-3 py-1.5 rounded-full border border-border bg-card hover:bg-accent transition-colors text-muted-foreground"
-                  >
-                    {q}
-                  </button>
-                ))}
-              </div>
-            </div>
-          ) : (
-            <div className="max-w-3xl mx-auto space-y-1 pb-4">
+      <main className="flex min-w-0 flex-1 flex-col">
+        <ChatTopBar sidebarOpen={sidebar.open} onToggleSidebar={sidebar.toggle} onNewChat={handleNewChat} />
+
+        {isEmpty ? (
+          <Greeting firstName={firstName} />
+        ) : (
+          <div className="scrollbar-thin flex-1 overflow-y-auto">
+            <div className="mx-auto w-full max-w-3xl space-y-8 px-4 pb-10 pt-4 sm:px-6">
               {activeSession?.messages.map(msg => (
                 <MessageBubble key={msg.id} message={msg} />
               ))}
               {isLoading && !isStreaming && (
-                <div className="flex justify-end mb-4">
-                  <ThinkingIndicator steps={thinkingSteps} currentNode={currentNode} />
-                </div>
+                <ThinkingIndicator steps={thinkingSteps} currentNode={currentNode} />
               )}
               {isLoading && isStreaming && streamingAnswer && (
                 <MessageBubble
@@ -465,48 +462,24 @@ export function ChatLayout() {
               )}
               <div ref={bottomRef} />
             </div>
-          )}
-        </ScrollArea>
+          </div>
+        )}
 
-        {/* Input area */}
-        <div className="border-t p-4 bg-background/95 backdrop-blur">
-          <AgentPanel
-            agents={agents}
-            selectedAgentId={selectedAgentId}
-            onSelectAgent={setSelectedAgentId}
-            filters={agentFilters}
-            onFiltersChange={setAgentFilters}
-            authToken={authToken}
-            onAgentsChanged={() => {
-              if (authToken) getAgents(authToken).then(setAgents).catch(() => {})
-            }}
-          />
-          <div className="max-w-3xl mx-auto">
-            <div className="flex gap-2 items-end">
-              <Input
-                ref={inputRef}
-                value={input}
-                onChange={e => setInput(e.target.value)}
-                onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend() } }}
-                placeholder="שאל שאלה על מסמכי השמאות..."
-                className="flex-1 h-11 rounded-xl border-border focus-visible:ring-sky-400 bg-card"
-                disabled={isLoading}
-              />
-              <Button
-                onClick={handleSend}
-                disabled={!input.trim() || isLoading}
-                size="icon"
-                className="h-11 w-11 rounded-xl shrink-0"
-              >
-                {isLoading ? (
-                  <Sparkles className="w-4 h-4 animate-spin" />
-                ) : (
-                  <Send className="w-4 h-4 rotate-180" />
-                )}
-              </Button>
-            </div>
+        {/* Composer: centred under the greeting while empty, docked at the bottom after.
+            It stays at the same place in the tree so its state survives the first message. */}
+        <div className="shrink-0 px-3 pb-3 sm:px-4">
+          <div className="mx-auto w-full max-w-3xl">
+            {composer}
+            {isEmpty ? (
+              <Suggestions onPick={q => { setInput(q); inputRef.current?.focus() }} />
+            ) : (
+              <p className="mt-2 text-center text-[11px] text-muted-foreground">
+                התשובות מבוססות על המסמכים במאגר. כדאי לבדוק את המקורות.
+              </p>
+            )}
           </div>
         </div>
+        {isEmpty && <div className="flex-[1.15]" aria-hidden />}
       </main>
     </div>
   )

@@ -1,8 +1,6 @@
 "use client"
 
 import { ThinkingStep } from "@/types/chat"
-import { cn } from "@/lib/utils"
-import { Sparkles } from "lucide-react"
 
 interface ThinkingIndicatorProps {
   steps: ThinkingStep[]
@@ -13,36 +11,29 @@ interface ThinkingIndicatorProps {
  * Shows only the CURRENT step in a single fixed line (no scrolling).
  * The line stays in place and the text swaps as each step completes.
  */
-export function ThinkingIndicator({ steps, currentNode }: ThinkingIndicatorProps) {
+export function ThinkingIndicator({ steps }: ThinkingIndicatorProps) {
   // Pick the last step (= current) or show generic "thinking"
   const currentStep = steps.length > 0 ? steps[steps.length - 1] : null
 
   return (
-    <div className="flex items-center gap-2.5 py-2 h-10">
-      {/* Animated sparkle */}
-      <div className="relative flex items-center justify-center w-6 h-6 shrink-0">
-        <div className="absolute inset-0 rounded-full bg-gradient-to-br from-sky-400/20 to-cyan-400/20 animate-pulse" />
-        <Sparkles className="w-4 h-4 text-sky-500 animate-sparkle" />
-      </div>
+    <div className="flex h-8 items-center gap-3">
+      {/* Pulsing dot */}
+      <span className="relative flex h-3 w-3 shrink-0">
+        <span className="absolute inset-0 animate-ping rounded-full bg-foreground/30" />
+        <span className="relative h-3 w-3 rounded-full bg-foreground" />
+      </span>
 
-      {/* Current step text – fades/slides on change */}
-      <div className="flex items-center gap-2 min-w-0 overflow-hidden">
+      {/* Current step text – fades in on change */}
+      <div className="flex min-w-0 items-center overflow-hidden">
         {currentStep ? (
-          <div key={currentStep.node} className="flex items-center gap-1.5 animate-fadeIn">
-            <span className="text-sm leading-none">{currentStep.icon}</span>
-            <span className="text-[13px] font-medium text-foreground whitespace-nowrap">
-              {currentStep.label}
-            </span>
+          <div key={currentStep.node} className="flex min-w-0 items-baseline gap-1.5 animate-fadeIn">
+            <span className="text-shimmer whitespace-nowrap text-[15px]">{currentStep.label}</span>
             {currentStep.detail && (
-              <span className="text-[11px] text-muted-foreground truncate max-w-[200px]">
-                — {currentStep.detail}
-              </span>
+              <span className="truncate text-xs text-muted-foreground">· {currentStep.detail}</span>
             )}
           </div>
         ) : (
-          <span className="text-[13px] font-medium text-foreground animate-fadeIn">
-            חושב...
-          </span>
+          <span className="text-shimmer text-[15px] animate-fadeIn">חושב…</span>
         )}
       </div>
     </div>

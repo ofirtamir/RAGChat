@@ -10,43 +10,34 @@ function LoginContent() {
   const callbackUrl = params.get("callbackUrl") || "/"
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-sky-50 to-cyan-50 dark:from-slate-950 dark:to-slate-900" dir="rtl">
-      <div className="w-full max-w-sm mx-4 bg-card border rounded-2xl shadow-xl p-8 flex flex-col items-center gap-6">
-        <div className="flex gap-2">
-          {[0,1,2,3,4].map(i => (
-            <span
-              key={i}
-              className="w-3 h-3 rounded-full bg-sky-400 animate-thinking"
-              style={{ animationDelay: `${i * 0.16}s` }}
-            />
-          ))}
-        </div>
+    <div className="flex min-h-dvh flex-col bg-background" dir="rtl">
+      <header className="px-5 py-4 text-[17px] font-semibold tracking-tight">שמאות AI</header>
 
-        <div className="text-center space-y-2">
-          <h1 className="text-3xl font-bold bg-gradient-to-l from-sky-500 to-cyan-400 bg-clip-text text-transparent">
-            שמאות AI
-          </h1>
-          <p className="text-sm text-muted-foreground leading-relaxed">
-            מערכת חיפוש חכמה במסמכי שמאות,
-            <br />חוות דעת ודוחות הערכה
+      <main className="flex flex-1 items-center justify-center px-5 pb-[12vh]">
+        <div className="flex w-full max-w-[22rem] flex-col items-center gap-8">
+          <div className="space-y-3 text-center">
+            <h1 className="text-[28px] font-normal tracking-tight">ברוכים הבאים</h1>
+            <p className="text-[15px] leading-relaxed text-muted-foreground">
+              חיפוש חכם במסמכי שמאות, חוות דעת ודוחות הערכה
+            </p>
+          </div>
+
+          <Button
+            onClick={() => signIn("google", { callbackUrl })}
+            variant="outline"
+            size="lg"
+            className="h-[52px] w-full gap-3 text-[15px] font-normal"
+          >
+            <GoogleLogo />
+            <span>המשך עם Google</span>
+          </Button>
+
+          <p className="text-center text-xs leading-relaxed text-muted-foreground">
+            רק שמאים מורשים יכולים להתחבר.
+            <br />ההתחברות שומרת רק שם, אימייל ותמונת פרופיל.
           </p>
         </div>
-
-        <Button
-          onClick={() => signIn("google", { callbackUrl })}
-          variant="outline"
-          size="lg"
-          className="w-full gap-3 h-12 bg-card hover:bg-accent"
-        >
-          <GoogleLogo />
-          <span>התחבר עם חשבון Google</span>
-        </Button>
-
-        <p className="text-[11px] text-muted-foreground/70 text-center leading-relaxed">
-          רק שמאים מורשים יכולים להתחבר.
-          <br />ההתחברות שומרת רק שם, אימייל ותמונת פרופיל.
-        </p>
-      </div>
+      </main>
     </div>
   )
 }

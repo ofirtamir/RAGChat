@@ -8,9 +8,8 @@ import {
   DialogDescription,
 } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
-import { ScrollArea } from "@/components/ui/scroll-area"
 import { DocumentInfo } from "@/types/chat"
-import { FileText, Database, Trash2, Upload } from "lucide-react"
+import { FileText, Trash2, Upload } from "lucide-react"
 import { useMe } from "@/lib/use-me"
 
 interface DocumentsDialogProps {
@@ -36,11 +35,14 @@ function getFileExtension(filename: string): string {
 function FileIcon({ filename }: { filename: string }) {
   const ext = getFileExtension(filename)
   const colorMap: Record<string, string> = {
-    pdf: "text-red-500",
-    txt: "text-gray-500",
-    md: "text-purple-500",
+    pdf: "text-red-500/80",
+    md: "text-violet-500/80",
   }
-  return <FileText className={`w-4 h-4 shrink-0 ${colorMap[ext] ?? "text-sky-500"}`} />
+  return (
+    <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-muted">
+      <FileText className={`h-4 w-4 ${colorMap[ext] ?? "text-muted-foreground"}`} />
+    </span>
+  )
 }
 
 export function DocumentsDialog({
@@ -62,10 +64,9 @@ export function DocumentsDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-md w-full" dir="rtl">
+      <DialogContent className="w-full max-w-md gap-5" dir="rtl">
         <DialogHeader>
-          <DialogTitle className="flex items-center gap-2 text-right">
-            <Database className="w-5 h-5 text-sky-500" />
+          <DialogTitle className="text-right text-lg font-semibold">
             מסמכי שמאות
           </DialogTitle>
           <DialogDescription className="text-right">
@@ -77,27 +78,27 @@ export function DocumentsDialog({
 
         {/* Document list */}
         {documents.length > 0 && (
-          <ScrollArea className="max-h-64 -mx-1 px-1">
-            <div className="space-y-1">
+          <div className="scrollbar-thin -mx-2 max-h-72 overflow-y-auto px-2">
+            <div className="space-y-0.5">
               {documents.map((doc, i) => (
                 <div
                   key={i}
-                  className="flex items-center gap-3 px-3 py-2.5 rounded-lg bg-muted/50 hover:bg-muted transition-colors"
+                  className="flex items-center gap-3 rounded-xl px-2 py-2 transition-colors hover:bg-muted/60"
                 >
                   <FileIcon filename={doc.source} />
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-medium truncate text-right">{doc.source}</p>
-                    <p className="text-[11px] text-muted-foreground text-right">
+                    <p className="text-xs text-muted-foreground text-right">
                       {doc.chunks} קטעים · {formatChars(doc.chars)}
                     </p>
                   </div>
-                  <span className="text-[10px] font-mono bg-background border rounded px-1.5 py-0.5 text-muted-foreground shrink-0">
+                  <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
                     {getFileExtension(doc.source).toUpperCase()}
                   </span>
                 </div>
               ))}
             </div>
-          </ScrollArea>
+          </div>
         )}
 
         {uploadError && (
@@ -105,7 +106,7 @@ export function DocumentsDialog({
         )}
 
         {/* Actions */}
-        <div className="flex gap-2 pt-1">
+        <div className="flex gap-2">
           <label className="flex-1">
             <input
               type="file"
@@ -117,7 +118,6 @@ export function DocumentsDialog({
             />
             <Button
               variant="default"
-              size="sm"
               className="w-full gap-2"
               disabled={isUploading}
               onClick={(e) => {
@@ -134,9 +134,8 @@ export function DocumentsDialog({
 
           {totalChunks > 0 && me?.is_admin && (
             <Button
-              variant="destructive"
-              size="sm"
-              className="gap-2"
+              variant="outline"
+              className="gap-2 text-destructive hover:text-destructive"
               onClick={() => {
                 onClearDocuments()
                 onOpenChange(false)

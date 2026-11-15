@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react"
 import { getUsage, UsageSummary } from "@/lib/admin-api"
 import { cn } from "@/lib/utils"
-import { DailyBars, ErrorNote, monthProjection, num, StatCard, usd } from "./shared"
+import { CARD, DailyBars, ErrorNote, monthProjection, num, StatCard, usd } from "./shared"
 
 const RANGES = [7, 30, 90]
 
@@ -24,7 +24,7 @@ export function UsageTab({ token }: { token: string | undefined }) {
   const rangeTokens = data.daily.reduce((sum, d) => sum + d.input_tokens + d.output_tokens, 0)
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <StatCard label="עלות החודש" value={usd(data.cost_month)}
           hint={`צפי לסוף החודש: ${usd(monthProjection(data.cost_month))}`} />
@@ -33,57 +33,56 @@ export function UsageTab({ token }: { token: string | undefined }) {
         <StatCard label="עלות ממוצעת לשאלה" value={usd(data.avg_cost_per_question)} hint="החודש, שיחות בלבד" />
       </div>
 
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2 py-1">
         <span className="text-sm text-muted-foreground">טווח:</span>
         {RANGES.map(r => (
-          <button key={r} onClick={() => setDays(r)}
-            className={cn("rounded-full border px-3 py-1 text-xs", days === r && "border-sky-500 bg-sky-50 dark:bg-sky-950")}>
+          <button key={r} onClick={() => setDays(r)} className="chip" data-active={days === r}>
             {r} ימים
           </button>
         ))}
-        <span className="text-xs text-muted-foreground">
+        <span className="ms-1 text-xs text-muted-foreground">
           {num(rangeQuestions)} שאלות · {usd(rangeCost)} · {num(Math.round(rangeTokens / 1000))}K טוקנים
         </span>
       </div>
 
       <div className="grid gap-3 lg:grid-cols-2">
-        <div className="rounded-xl border bg-card p-4">
-          <p className="mb-3 text-xs text-muted-foreground">עלות יומית (שיחות + אינדוקס)</p>
+        <div className={cn(CARD, "p-5")}>
+          <p className="mb-4 text-[13px] text-muted-foreground">עלות יומית (שיחות + אינדוקס)</p>
           <DailyBars days={data.daily} pick={d => d.chat_cost + d.indexing_cost} format={usd}
-            barClassName="bg-emerald-500/80 hover:bg-emerald-500" />
+            barClassName="bg-emerald-500/70 hover:bg-emerald-500" />
         </div>
-        <div className="rounded-xl border bg-card p-4">
-          <p className="mb-3 text-xs text-muted-foreground">שאלות ביום</p>
+        <div className={cn(CARD, "p-5")}>
+          <p className="mb-4 text-[13px] text-muted-foreground">שאלות ביום</p>
           <DailyBars days={data.daily} pick={d => d.questions} format={n => `${n} שאלות`} />
         </div>
       </div>
 
-      <div className="overflow-x-auto rounded-xl border bg-card">
-        <p className="border-b px-3 py-2 text-xs text-muted-foreground">המשתמשים היקרים ביותר החודש</p>
-        <table className="w-full text-sm">
-          <thead className="border-b bg-muted/40 text-xs text-muted-foreground">
+      <div className={cn(CARD, "overflow-x-auto")}>
+        <p className="border-b px-4 py-3 text-sm font-medium">המשתמשים היקרים ביותר החודש</p>
+        <table className="data-table">
+          <thead>
             <tr>
-              <th className="p-2 text-right font-medium">משתמש</th>
-              <th className="p-2 text-right font-medium">שאלות היום</th>
-              <th className="p-2 text-right font-medium">שאלות החודש</th>
-              <th className="p-2 text-right font-medium">עלות החודש</th>
-              <th className="p-2 text-right font-medium">עלות לשאלה</th>
+              <th>משתמש</th>
+              <th>שאלות היום</th>
+              <th>שאלות החודש</th>
+              <th>עלות החודש</th>
+              <th>עלות לשאלה</th>
             </tr>
           </thead>
           <tbody>
             {(data.top_users ?? []).map(u => (
-              <tr key={u.sub} className="border-b last:border-0">
-                <td className="p-2">
+              <tr key={u.sub}>
+                <td>
                   {u.name || "—"} <span dir="ltr" className="text-xs text-muted-foreground">{u.email}</span>
                 </td>
-                <td className="p-2 tabular-nums">{num(u.questions_today)}</td>
-                <td className="p-2 tabular-nums">{num(u.questions_month)}</td>
-                <td className="p-2 tabular-nums">{usd(u.cost_month)}</td>
-                <td className="p-2 tabular-nums">{usd(u.questions_month ? u.cost_month / u.questions_month : 0)}</td>
+                <td className="tabular-nums">{num(u.questions_today)}</td>
+                <td className="tabular-nums">{num(u.questions_month)}</td>
+                <td className="tabular-nums">{usd(u.cost_month)}</td>
+                <td className="tabular-nums">{usd(u.questions_month ? u.cost_month / u.questions_month : 0)}</td>
               </tr>
             ))}
             {!(data.top_users ?? []).length && (
-              <tr><td colSpan={5} className="p-8 text-center text-sm text-muted-foreground">עדיין אין שימוש החודש.</td></tr>
+              <tr><td colSpan={5} className="py-12 text-center text-sm text-muted-foreground">עדיין אין שימוש החודש.</td></tr>
             )}
           </tbody>
         </table>
