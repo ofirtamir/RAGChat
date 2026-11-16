@@ -244,9 +244,12 @@ def test_chunks_carry_filter_metadata_and_page():
     library_store.save_parsed("test_agent", key, [
         {"number": 0, "markdown": "פסקה ראשונה."}, {"number": 1, "markdown": ""},
         {"number": 2, "markdown": "פסקה בעמוד שלישי."}], tables=0, problems=[])
-    chunks = library_index.build_chunks(AGENT, library_store.get_document("test_agent", key))
-    assert [c.metadata["page"] for c in chunks] == [0, 2]
-    meta = chunks[0].metadata
+    doc = library_store.get_document("test_agent", key)
+    chunks = library_index.build_chunks(doc)
+    # short paragraphs from different pages are packed together; the chunk keeps its first page
+    assert [c.page for c in chunks] == [0]
+    assert "פסקה ראשונה." in chunks[0].text and "פסקה בעמוד שלישי." in chunks[0].text
+    meta = library_index.document_meta(AGENT, doc)
     assert meta["Committee"] == "ירושלים" and meta["PublicityDate_int"] == 20250301
     assert meta["record_key"] == key and meta["source"] == "הכרעה 1"
 
@@ -268,8 +271,11 @@ def test_failed_indexing_keeps_the_parsed_text_and_can_be_retried(monkeypatch):
     doc = library_store.get_document("test_agent", key)
     assert doc["status"] == "parsed" and "Gemini" in doc["error"] and doc["parsed_pages"]
 
-    monkeypatch.setattr(library_index, "index_document", lambda agent, key: {
-        "chunks": 7, "tokens": 20_000, "cost_usd": 0.003, "exact": True})
+    def indexed(agent, key):  # what a successful index_document records
+        library_store.set_status("test_agent", key, "indexed", chunks=7, embed_tokens=20_000,
+                                 index_cost_usd=0.003)
+
+    monkeypatch.setattr(library_index, "index_document", indexed)
     library_store.transition(AGENT, "indexing", ("parsed", "indexed"), keys=[key])
     library_index.process("test_agent", key)
     doc = library_store.get_document("test_agent", key)
@@ -281,25 +287,21 @@ def test_failed_indexing_keeps_the_parsed_text_and_can_be_retried(monkeypatch):
 
 
 def test_indexing_cost_uses_gemini_token_count(monkeypatch):
-    import src.agents
     import src.embeddings
 
     library_store.upsert_catalog(AGENT, [record(1)])
     key = library_store.search(AGENT)["documents"][0]["record_key"]
     library_store.save_parsed("test_agent", key, [{"number": 0, "markdown": "טקסט " * 40}], 0, [])
 
-    class Store:
-        def add_documents(self, chunks, ids):
-            self.ids = ids
-
-    store = Store()
-    monkeypatch.setattr(src.agents, "get_agent_vector_store", lambda agent_id: store)
-    monkeypatch.setattr(library_index, "remove_from_index", lambda agent_id, key: None)
+    written = {}
+    monkeypatch.setattr(library_index.hybrid_index, "replace_document",
+                        lambda agent, key, rows: written.update(rows=rows))
+    monkeypatch.setattr(src.embeddings, "embed_documents", lambda texts: [[0.0] * 768 for _ in texts])
     monkeypatch.setattr(src.embeddings, "count_embedding_tokens", lambda texts: (123_456, True))
     admin_store.update_settings({"price_embedding_per_m": 0.15})
 
     result = library_index.index_document(AGENT, key)
-    assert result == {"chunks": len(store.ids), "tokens": 123_456,
+    assert result == {"chunks": len(written["rows"]), "tokens": 123_456,
                       "cost_usd": pytest.approx(123_456 * 0.15 / 1_000_000), "exact": True}
     assert admin_store.cost_this_month() == pytest.approx(123_456 * 0.15 / 1_000_000)
 

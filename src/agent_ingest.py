@@ -5,10 +5,7 @@ metadata logic with scripts/ingest_govil.py. One ingestion job at a time.
 """
 import threading
 
-from langchain_core.documents import Document
-
-from src.agents import get_agent, get_agent_vector_store, _date_to_int
-from src.chunker import chunk_documents
+from src.agents import get_agent, _date_to_int
 from src.govil_client import GovilClient, record_key, extract_pdf_text
 
 MIN_TEXT_CHARS = 100  # below this the PDF is probably a scan (needs OCR — skipped)
@@ -43,22 +40,26 @@ def source_name(agent: dict, record_meta: dict, fallback: str) -> str:
 
 
 def ingest_document_text(agent: dict, key: str, text: str, record_meta: dict) -> int:
-    """Chunk + embed one document into the agent's collection. Returns #chunks."""
-    vs = get_agent_vector_store(agent["id"])
+    """Chunk + embed one document into the agent's search index. Returns #chunks."""
+    from src import hybrid_index
+    from src.embeddings import embed_documents
+    from src.section_chunker import chunk_parsed_document
+
     meta = flatten_metadata(agent, record_meta)
     meta["record_key"] = key
     meta["source"] = source_name(agent, record_meta, key)
-    chunks = chunk_documents([Document(page_content=text, metadata=meta)])
+    chunks = chunk_parsed_document([(0, text)])
     if not chunks:
         return 0
-    vs.add_documents(chunks, ids=[f"{key}_{i}" for i in range(len(chunks))])
+    vectors = embed_documents([c.text for c in chunks])
+    hybrid_index.replace_document(agent, key, hybrid_index.rows_for(agent, key, meta, chunks, vectors))
     return len(chunks)
 
 
 def existing_record_keys(agent: dict) -> set[str]:
-    vs = get_agent_vector_store(agent["id"])
-    got = vs._collection.get(include=[])
-    return {chunk_id.rsplit("_", 1)[0] for chunk_id in got["ids"]}
+    from src import hybrid_index
+
+    return hybrid_index.record_keys(agent)
 
 
 def _run_ingest_latest(agent: dict, limit: int):

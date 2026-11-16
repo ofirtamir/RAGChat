@@ -93,11 +93,12 @@ class ChatResponse(BaseModel):
 @app.get("/api/agents")
 async def get_agents(user_id: str = Depends(get_active_user_id)):
     """List available knowledge-base agents with their filter schemas."""
-    from src.agents import list_agents, get_agent_vector_store
+    from src import hybrid_index
+    from src.agents import list_agents
     agents = []
     for agent in list_agents():
         try:
-            chunk_count = get_agent_vector_store(agent["id"])._collection.count()
+            chunk_count = hybrid_index.count(agent)
         except Exception:
             chunk_count = 0
         agents.append({

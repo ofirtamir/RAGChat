@@ -44,6 +44,7 @@ export interface AdminSettings {
   price_input_per_m: number
   price_output_per_m: number
   price_embedding_per_m: number
+  price_embedding_batch_per_m: number
 }
 
 export interface UsageDay {
@@ -191,8 +192,18 @@ export interface LibrarySearchResult extends LibraryCounts {
 
 export type LibraryActionName = "queue" | "queue_and_index" | "cancel" | "index" | "unindex"
 
+export interface BatchJob {
+  name: string
+  agent_id: string
+  documents: number
+  state: "open" | "done" | "failed"
+  error: string | null
+  created_at: string
+}
+
 export const getLibraryAgents = (token: string | undefined) =>
-  call<{ agents: LibraryAgent[]; worker: WorkerStatus; sync: SyncStatus }>("/admin/library/agents", token)
+  call<{ agents: LibraryAgent[]; worker: WorkerStatus; sync: SyncStatus; batches: BatchJob[] }>(
+    "/admin/library/agents", token)
 
 export const searchLibrary = (
   agentId: string,

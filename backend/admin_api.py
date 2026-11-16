@@ -9,7 +9,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
-from src import admin_store, library_index, library_store, library_sync
+from src import admin_store, library_batch, library_index, library_store, library_sync
 from .auth import require_admin, require_worker
 
 admin = APIRouter(prefix="/api/admin", dependencies=[Depends(require_admin)])
@@ -124,7 +124,8 @@ def library_agents():
         {"id": a["id"], "name": a["name"], "filters": a.get("filters", []),
          **library_store.status_counts(a["id"])}
         for a in list_agents()
-    ], "worker": library_store.worker_status(), "sync": library_sync.get_status()}
+    ], "worker": library_store.worker_status(), "sync": library_sync.get_status(),
+       "batches": library_batch.status()}
 
 
 @admin.post("/library/search")
