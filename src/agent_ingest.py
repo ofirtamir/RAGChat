@@ -1,20 +1,10 @@
-"""Server-side ingestion of gov.il documents into an agent's collection.
+"""Metadata helpers for agent documents: the filter fields stored on every chunk
+and the display name of a document. Used by src/library_index.py.
 
-Used by the API endpoint (production: pulls straight from gov.il) and shares
-metadata logic with scripts/ingest_govil.py. One ingestion job at a time.
+Documents reach an agent's index only through the admin library
+(src/library_store.py → local parse worker → src/library_index.py).
 """
-import threading
-
-from src.agents import get_agent, _date_to_int
-from src.govil_client import GovilClient, record_key, extract_pdf_text
-
-MIN_TEXT_CHARS = 100  # below this the PDF is probably a scan (needs OCR — skipped)
-
-_job_lock = threading.Lock()
-job_status: dict = {
-    "running": False, "agent_id": None, "total": 0, "done": 0,
-    "ingested": 0, "skipped": 0, "failed": 0, "error": None,
-}
+from src.agents import _date_to_int
 
 
 def flatten_metadata(agent: dict, record_meta: dict) -> dict:
@@ -37,94 +27,3 @@ def source_name(agent: dict, record_meta: dict, fallback: str) -> str:
     if header_field and record_meta.get(header_field):
         return str(record_meta[header_field])
     return fallback
-
-
-def ingest_document_text(agent: dict, key: str, text: str, record_meta: dict) -> int:
-    """Chunk + embed one document into the agent's search index. Returns #chunks."""
-    from src import hybrid_index
-    from src.embeddings import embed_documents
-    from src.section_chunker import chunk_parsed_document
-
-    meta = flatten_metadata(agent, record_meta)
-    meta["record_key"] = key
-    meta["source"] = source_name(agent, record_meta, key)
-    chunks = chunk_parsed_document([(0, text)])
-    if not chunks:
-        return 0
-    vectors = embed_documents([c.text for c in chunks])
-    hybrid_index.replace_document(agent, key, hybrid_index.rows_for(agent, key, meta, chunks, vectors))
-    return len(chunks)
-
-
-def existing_record_keys(agent: dict) -> set[str]:
-    from src import hybrid_index
-
-    return hybrid_index.record_keys(agent)
-
-
-def _run_ingest_latest(agent: dict, limit: int):
-    try:
-        source = agent.get("source", {})
-        client = GovilClient(source["search_url"], source["x_client_id"])
-        records = client.latest_records(limit)
-        known = existing_record_keys(agent)
-        with _job_lock:
-            job_status["total"] = len(records)
-
-        for data in records:
-            key = record_key(data)
-            try:
-                if key in known:
-                    with _job_lock:
-                        job_status["skipped"] += 1
-                    continue
-                docs = client.document_urls(data)
-                text_parts = []
-                for doc in docs:
-                    if str(doc.get("Extension", "")).lower() not in ("pdf", ""):
-                        continue
-                    text_parts.append(extract_pdf_text(client.download(doc["FileName"])))
-                text = "\n\n".join(t for t in text_parts if t)
-                if len(text) < MIN_TEXT_CHARS:
-                    with _job_lock:
-                        job_status["skipped"] += 1
-                    continue
-                ingest_document_text(agent, key, text, data)
-                with _job_lock:
-                    job_status["ingested"] += 1
-            except Exception as exc:
-                with _job_lock:
-                    job_status["failed"] += 1
-                    job_status["error"] = str(exc)[:300]
-            finally:
-                with _job_lock:
-                    job_status["done"] += 1
-    except Exception as exc:
-        with _job_lock:
-            job_status["error"] = str(exc)
-    finally:
-        with _job_lock:
-            job_status["running"] = False
-
-
-def start_ingest_latest(agent_id: str, limit: int) -> dict:
-    """Start a background ingestion job. Returns an error dict if one is running."""
-    agent = get_agent(agent_id)
-    if agent is None:
-        return {"error": f"Unknown agent: {agent_id}"}
-    source = agent.get("source", {})
-    if not source.get("search_url") or not source.get("x_client_id"):
-        return {"error": "Agent config is missing source.search_url / source.x_client_id — "
-                         "recreate it with scripts/create_govil_agent.py"}
-    with _job_lock:
-        if job_status["running"]:
-            return {"error": "An ingestion job is already running"}
-        job_status.update(running=True, agent_id=agent_id, total=0, done=0,
-                          ingested=0, skipped=0, failed=0, error=None)
-    threading.Thread(target=_run_ingest_latest, args=(agent, limit), daemon=True).start()
-    return {"started": True}
-
-
-def get_job_status() -> dict:
-    with _job_lock:
-        return dict(job_status)

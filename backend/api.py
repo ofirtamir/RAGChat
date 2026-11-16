@@ -14,7 +14,7 @@ from typing import AsyncGenerator
 from concurrent.futures import ThreadPoolExecutor
 from queue import Queue, Empty
 
-from fastapi import FastAPI, UploadFile, File, HTTPException, Depends
+from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -23,28 +23,14 @@ from pydantic import BaseModel
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.graph import run_rag_pipeline, stream_rag_pipeline
-from src.document_loader import load_document, SUPPORTED_EXTENSIONS
-from src.chunker import chunk_documents
-from src.vector_store import (
-    add_documents,
-    get_document_count,
-    clear_vector_store,
-    list_document_sources,
-    get_all_chunks_for_source,
-)
 from src.observability import initialize_langfuse
 from src import admin_store, library_index, sessions_store
 from src.usage_tracker import UsageCollector
 from .admin_api import admin as admin_router, worker as worker_router
 from .auth import access_state, get_active_user, get_active_user_id, get_current_user, require_admin
-from config import LLM_MODEL, UPLOADS_DIR
+from config import LLM_MODEL
 
-# Upload limits — enforced by streaming the file and counting bytes so a
-# malicious client can't just lie about Content-Length.
-_MAX_UPLOAD_BYTES_PER_FILE = 25 * 1024 * 1024  # 25 MB
-_MAX_UPLOAD_FILES_PER_REQUEST = 10
-
-app = FastAPI(title="RAGChat API", version="1.0.0")
+app =FastAPI(title="RAGChat API", version="1.0.0")
 
 # ALLOWED_ORIGINS: comma-separated list of permitted frontend origins.
 # Set via env var in production, e.g.:
@@ -112,33 +98,6 @@ async def get_agents(user_id: str = Depends(get_active_user_id)):
     return {"agents": agents}
 
 
-class IngestRequest(BaseModel):
-    limit: int = 100
-
-
-@app.post("/api/agents/{agent_id}/ingest")
-async def ingest_agent_latest(
-    agent_id: str,
-    request: IngestRequest,
-    _admin: dict = Depends(require_admin),
-):
-    """Pull the latest N documents for this agent straight from gov.il into
-    the server's vector store (search → download PDF → local pypdf text
-    extraction → embed). Runs as a background job; poll the status endpoint."""
-    from src.agent_ingest import start_ingest_latest
-    limit = max(1, min(request.limit, 500))
-    result = start_ingest_latest(agent_id, limit)
-    if "error" in result:
-        raise HTTPException(status_code=409, detail=result["error"])
-    return result
-
-
-@app.get("/api/agents/ingest/status")
-async def ingest_status(_admin: dict = Depends(require_admin)):
-    from src.agent_ingest import get_job_status
-    return get_job_status()
-
-
 def _daily_limit(user: dict, settings: dict) -> int:
     """Questions per day for this user; 0 means unlimited."""
     return user["daily_limit"] if user["daily_limit"] is not None else settings["default_daily_limit"]
@@ -160,6 +119,14 @@ async def me(payload: dict = Depends(get_current_user)):
         "daily_limit": 0 if state["is_admin"] else _daily_limit(user, settings),
         "questions_today": admin_store.questions_today(user["sub"]),
     }
+
+
+def _require_agent(agent_id: str | None) -> None:
+    """Every question searches an agent's library — there is no free-form upload store."""
+    from src.agents import get_agent
+
+    if not agent_id or not re.fullmatch(r"[A-Za-z0-9_-]+", agent_id) or get_agent(agent_id) is None:
+        raise HTTPException(status_code=400, detail="יש לבחור מאגר לחיפוש")
 
 
 def _enforce_quota(state: dict) -> None:
@@ -203,6 +170,7 @@ async def chat(
     state: dict = Depends(get_active_user),
 ):
     """Run the RAG pipeline and return the result."""
+    _require_agent(request.agent_id)
     _enforce_quota(state)
     user_id = state["user"]["sub"]
     session_id = request.session_id or str(uuid.uuid4())
@@ -280,6 +248,7 @@ async def chat_stream(
     state: dict = Depends(get_active_user),
 ):
     """Stream the RAG pipeline stages as SSE events, flushed in real-time."""
+    _require_agent(request.agent_id)
     _enforce_quota(state)
     user_id = state["user"]["sub"]
     session_id = request.session_id or str(uuid.uuid4())
@@ -363,138 +332,6 @@ async def chat_stream(
             "Content-Type": "text/event-stream; charset=utf-8",
         },
     )
-
-
-def _safe_upload_filename(raw_name: str | None) -> str:
-    """Reduce an uploaded filename to a basename safe to write inside UPLOADS_DIR.
-
-    Rejects path traversal (``../``), absolute paths, and empty/dotfile names.
-    Returns the bare filename (no directory components) on success.
-    """
-    if not raw_name:
-        raise HTTPException(status_code=400, detail="Missing filename")
-
-    # Strip any directory components the client tried to send. PurePosixPath
-    # handles forward slashes; we also reject backslashes (Windows clients).
-    if "\x00" in raw_name or "\\" in raw_name:
-        raise HTTPException(status_code=400, detail="Invalid filename")
-
-    name = Path(raw_name).name  # Path.name strips directories on both OSes
-    if not name or name in (".", "..") or name.startswith("."):
-        raise HTTPException(status_code=400, detail="Invalid filename")
-
-    return name
-
-
-async def _stream_upload_to_disk(file: UploadFile, dest: Path) -> int:
-    """Copy an UploadFile to disk in chunks, enforcing the size cap.
-
-    Returns the number of bytes written. Raises ``HTTPException`` when the
-    cap is exceeded — the partial file is removed before raising so we don't
-    leave attacker-controlled bytes on disk.
-    """
-    chunk_size = 1024 * 1024  # 1 MB
-    total = 0
-    with open(dest, "wb") as out:
-        while True:
-            chunk = await file.read(chunk_size)
-            if not chunk:
-                break
-            total += len(chunk)
-            if total > _MAX_UPLOAD_BYTES_PER_FILE:
-                out.close()
-                dest.unlink(missing_ok=True)
-                raise HTTPException(
-                    status_code=413,
-                    detail=(
-                        f"File '{file.filename}' exceeds the "
-                        f"{_MAX_UPLOAD_BYTES_PER_FILE // (1024 * 1024)} MB per-file limit"
-                    ),
-                )
-            out.write(chunk)
-    return total
-
-
-@app.post("/api/upload")
-async def upload_documents(
-    files: list[UploadFile] = File(...),
-    _user: dict = Depends(get_active_user),
-):
-    """Upload and index documents into the vector store.
-
-    Requires a valid Google ID token. Each file is capped at 25 MB, with at
-    most 10 files per request, and filenames are sanitized so a malicious
-    client can't escape the uploads directory via ``../``.
-    """
-    if len(files) > _MAX_UPLOAD_FILES_PER_REQUEST:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Too many files in one request (max {_MAX_UPLOAD_FILES_PER_REQUEST})",
-        )
-
-    results = []
-    for file in files:
-        try:
-            safe_name = _safe_upload_filename(file.filename)
-        except HTTPException as e:
-            results.append({"filename": file.filename, "status": "error", "message": e.detail})
-            continue
-
-        ext = Path(safe_name).suffix.lower()
-        if ext not in SUPPORTED_EXTENSIONS:
-            results.append({"filename": safe_name, "status": "error", "message": f"Unsupported extension: {ext}"})
-            continue
-
-        save_path = UPLOADS_DIR / safe_name
-        # Defence-in-depth: ensure the resolved path is still inside UPLOADS_DIR.
-        # _safe_upload_filename already enforces this, but resolving guards
-        # against any future loosening of the sanitizer.
-        try:
-            resolved = save_path.resolve()
-            resolved.relative_to(UPLOADS_DIR.resolve())
-        except (ValueError, OSError):
-            results.append({"filename": safe_name, "status": "error", "message": "Invalid filename"})
-            continue
-
-        try:
-            await _stream_upload_to_disk(file, save_path)
-            docs = load_document(save_path)
-            chunks = chunk_documents(docs)
-            add_documents(chunks)
-            results.append({"filename": safe_name, "status": "ok", "chunks": len(chunks)})
-        except HTTPException:
-            # Size-cap rejections — re-raise so FastAPI returns the proper status.
-            raise
-        except Exception as e:
-            results.append({"filename": safe_name, "status": "error", "message": str(e)})
-
-    return {"results": results}
-
-
-@app.get("/api/documents")
-async def get_documents(_user: dict = Depends(get_active_user)):
-    """Return stats and list of indexed documents (auth-only)."""
-    try:
-        sources = list_document_sources()
-        total = get_document_count()
-        doc_stats = []
-        for src in sources:
-            chunks = get_all_chunks_for_source(src)
-            doc_stats.append({
-                "source": src,
-                "chunks": len(chunks),
-                "chars": sum(len(c.page_content) for c in chunks),
-            })
-        return {"total_chunks": total, "documents": doc_stats}
-    except Exception:
-        return {"total_chunks": 0, "documents": []}
-
-
-@app.delete("/api/documents")
-async def delete_documents(_admin: dict = Depends(require_admin)):
-    """Clear all documents from the vector store (admin only)."""
-    clear_vector_store()
-    return {"status": "cleared"}
 
 
 # ── Chat session persistence ─────────────────────────────────────────────

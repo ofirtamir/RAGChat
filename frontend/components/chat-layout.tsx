@@ -1,17 +1,14 @@
 "use client"
 
-import { useState, useRef, useEffect, useCallback } from "react"
+import { useState, useRef, useEffect } from "react"
 import { useSession } from "next-auth/react"
 import { v4 as uuidv4 } from "uuid"
 import { Sidebar } from "@/components/sidebar"
 import { MessageBubble } from "@/components/message-bubble"
 import { ThinkingIndicator } from "@/components/thinking-indicator"
-import { Message, ChatSession, DocumentInfo, ThinkingStep } from "@/types/chat"
+import { Message, ChatSession, ThinkingStep } from "@/types/chat"
 import {
   sendMessageStreaming,
-  uploadFiles,
-  getDocuments,
-  clearDocuments,
   listSessions,
   getSession,
   upsertSession,
@@ -87,10 +84,6 @@ export function ChatLayout() {
   const [localLoaded, setLocalLoaded] = useState(false)
   const [input, setInput] = useState("")
   const [isLoading, setIsLoading] = useState(false)
-  const [documents, setDocuments] = useState<DocumentInfo[]>([])
-  const [totalChunks, setTotalChunks] = useState(0)
-  const [isUploading, setIsUploading] = useState(false)
-  const [uploadError, setUploadError] = useState<string>("")
   const [agents, setAgents] = useState<AgentInfo[]>([])
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null)
   const [agentFilters, setAgentFilters] = useState<AgentFilters>({})
@@ -189,22 +182,16 @@ export function ChatLayout() {
 
   const activeSession = sessions.find(s => s.id === activeId)
 
-  const refreshDocuments = useCallback(async () => {
-    if (!authToken) return
-    try {
-      const data = await getDocuments(authToken)
-      setDocuments(data.documents)
-      setTotalChunks(data.total_chunks)
-    } catch {}
-  }, [authToken])
-
-  useEffect(() => { refreshDocuments() }, [refreshDocuments])
-
-  // Load available agents once authenticated
+  // Load the agents once authenticated. Every question searches an agent's
+  // library, so keep one selected: the current choice if it still exists,
+  // otherwise the first.
   useEffect(() => {
     if (!authToken) return
     getAgents(authToken)
-      .then(setAgents)
+      .then(list => {
+        setAgents(list)
+        setSelectedAgentId(cur => (cur && list.some(a => a.id === cur) ? cur : list[0]?.id ?? null))
+      })
       .catch(err => console.error("Failed to load agents:", err))
   }, [authToken])
 
@@ -218,7 +205,7 @@ export function ChatLayout() {
 
   const handleSend = async () => {
     const query = input.trim()
-    if (!query || isLoading || !activeSession) return
+    if (!query || isLoading || !activeSession || !selectedAgentId) return
     setInput("")
 
     const userMsg: Message = {
@@ -358,37 +345,6 @@ export function ChatLayout() {
     }
   }
 
-  const handleUpload = async (files: File[]) => {
-    if (!authToken) {
-      setUploadError("נא להתחבר שוב")
-      return
-    }
-    setIsUploading(true)
-    setUploadError("")
-    try {
-      const result = await uploadFiles(files, authToken)
-      const failed = result.results?.filter(r => r.status !== "ok") ?? []
-      if (failed.length > 0) {
-        const msg = failed
-          .slice(0, 2)
-          .map(r => `${r.filename}: ${r.message || "שגיאה"}`)
-          .join(" | ")
-        setUploadError(msg)
-      }
-      await refreshDocuments()
-    } catch (err) {
-      setUploadError(err instanceof Error ? err.message : "העלאה נכשלה")
-    } finally {
-      setIsUploading(false)
-    }
-  }
-
-  const handleClear = async () => {
-    if (!authToken) return
-    await clearDocuments(authToken)
-    await refreshDocuments()
-  }
-
   const isEmpty = !activeSession?.messages.length
   const firstName = authSession?.user?.name?.trim().split(/\s+/)[0]
 
@@ -401,11 +357,7 @@ export function ChatLayout() {
       onSelectAgent={setSelectedAgentId}
       filters={agentFilters}
       onFiltersChange={setAgentFilters}
-      authToken={authToken}
-      onAgentsChanged={() => {
-        if (authToken) getAgents(authToken).then(setAgents).catch(() => {})
-      }}
-      action={<SendButton onClick={handleSend} disabled={!input.trim() || isLoading} loading={isLoading} />}
+      action={<SendButton onClick={handleSend} disabled={!input.trim() || isLoading || !selectedAgentId} loading={isLoading} />}
     >
       <textarea
         ref={inputRef}
@@ -432,12 +384,6 @@ export function ChatLayout() {
         onNewChat={handleNewChat}
         onSelectSession={setActiveId}
         onDeleteSession={handleDeleteSession}
-        documents={documents}
-        totalChunks={totalChunks}
-        onUpload={handleUpload}
-        onClearDocuments={handleClear}
-        isUploading={isUploading}
-        uploadError={uploadError}
         open={sidebar.open}
         mobileOpen={sidebar.mobileOpen}
         onClose={sidebar.close}

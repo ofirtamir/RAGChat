@@ -116,40 +116,6 @@ export async function getAgents(token: string | undefined): Promise<AgentInfo[]>
   return data.agents ?? []
 }
 
-export interface IngestStatus {
-  running: boolean
-  agent_id: string | null
-  total: number
-  done: number
-  ingested: number
-  skipped: number
-  failed: number
-  error: string | null
-}
-
-/** Ask the server to pull the latest N documents for this agent from gov.il. */
-export async function startAgentIngest(
-  agentId: string,
-  limit: number,
-  token: string | undefined,
-): Promise<void> {
-  const res = await authFetch(`${API_BASE}/agents/${encodeURIComponent(agentId)}/ingest`, token, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ limit }),
-  })
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ detail: "Ingest failed" }))
-    throw new Error(err.detail || "Ingest failed")
-  }
-}
-
-export async function getIngestStatus(token: string | undefined): Promise<IngestStatus> {
-  const res = await authFetch(`${API_BASE}/agents/ingest/status`, token)
-  if (!res.ok) throw new Error("Failed to fetch ingest status")
-  return res.json()
-}
-
 export async function sendMessage(
   query: string,
   chatHistory: { role: string; content: string }[],
@@ -271,23 +237,6 @@ export async function sendMessageStreaming(
   return result
 }
 
-export async function uploadFiles(
-  files: File[],
-  token: string | undefined,
-): Promise<{ results: { filename: string; status: string; chunks?: number; message?: string }[] }> {
-  const formData = new FormData()
-  files.forEach(f => formData.append("files", f))
-  const res = await authFetch(`${API_BASE}/upload`, token, {
-    method: "POST",
-    body: formData,
-  })
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ detail: "Upload failed" }))
-    throw new Error(err.detail || "Upload failed")
-  }
-  return res.json()
-}
-
 export interface SourceDocument {
   record_key: string
   title: string
@@ -308,21 +257,6 @@ export async function getSourceDocument(
   )
   if (!res.ok) throw new Error(res.status === 404 ? "המסמך לא נמצא" : "טעינת המסמך נכשלה")
   return res.json()
-}
-
-export async function getDocuments(
-  token: string | undefined,
-): Promise<{ total_chunks: number; documents: { source: string; chunks: number; chars: number }[] }> {
-  const res = await authFetch(`${API_BASE}/documents`, token)
-  if (!res.ok) throw new Error("Failed to fetch documents")
-  return res.json()
-}
-
-export async function clearDocuments(token: string | undefined): Promise<void> {
-  const res = await authFetch(`${API_BASE}/documents`, token, {
-    method: "DELETE",
-  })
-  if (!res.ok) throw new Error("Failed to clear documents")
 }
 
 // ── Chat session persistence ─────────────────────────────────────────────
