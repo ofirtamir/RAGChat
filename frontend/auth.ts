@@ -66,9 +66,15 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
     Google({
       // Google ID tokens expire after one hour. Offline access makes Google
       // issue a refresh token so the ID token can be renewed without the user
-      // signing in again; `prompt: "consent"` is what makes Google hand out a
-      // refresh token on every sign-in, not only on the very first one.
-      authorization: { params: { access_type: "offline", prompt: "consent" } },
+      // signing in again; `consent` is what makes Google hand out a refresh
+      // token on every sign-in, not only on the very first one.
+      //
+      // `select_account` always shows Google's account chooser. Without it
+      // Google silently signs in with whichever account the browser is already
+      // using, so a person with two Google accounts can never pick the other one.
+      authorization: {
+        params: { access_type: "offline", prompt: "consent select_account" },
+      },
     }),
   ],
   callbacks: {

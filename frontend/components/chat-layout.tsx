@@ -25,6 +25,8 @@ import {
 } from "@/lib/api"
 import { redirectToSignIn } from "@/lib/auth-redirect"
 import { AgentPanel } from "@/components/agent-panel"
+import { AccessGate } from "@/components/access-gate"
+import { useMe } from "@/lib/use-me"
 import { Send, Sparkles } from "lucide-react"
 import { cn } from "@/lib/utils"
 
@@ -82,6 +84,7 @@ export function ChatLayout() {
   const { data: authSession, status: authStatus } = useSession()
   const userId = authSession?.user?.id
   const authToken = authSession?.idToken
+  const me = useMe()
   const [sessions, setSessions] = useState<ChatSession[]>(() => [createSession()])
   const [activeId, setActiveId] = useState<string>(() => "")
   const [historyLoaded, setHistoryLoaded] = useState(false)
@@ -389,6 +392,8 @@ export function ChatLayout() {
   }
 
   const isEmpty = !activeSession?.messages.length
+
+  if (me && !me.allowed) return <AccessGate me={me} />
 
   return (
     <div className="flex h-screen w-full overflow-hidden bg-background" dir="rtl">

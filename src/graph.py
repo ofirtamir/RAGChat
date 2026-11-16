@@ -23,10 +23,7 @@ from src.planner import create_fallback_plan, QueryPlan
 from src.retriever import retrieve_for_query
 from src.vector_store import get_document_count, list_document_sources, get_all_chunks_for_source
 from src.prompt_store import load_prompt
-from config import (
-    GOOGLE_API_KEY, LLM_MODEL, LLM_TEMPERATURE, LLM_MAX_OUTPUT_TOKENS,
-    LLM_TIMEOUT_LONG, LLM_MAX_RETRIES,
-)
+from src.llm import answer_llm
 
 
 # ──────────────────────────────────────────────
@@ -67,14 +64,7 @@ def _agent_context(state: GraphState) -> tuple[str | None, dict | None]:
 # ──────────────────────────────────────────────
 
 def _get_llm() -> ChatGoogleGenerativeAI:
-    return ChatGoogleGenerativeAI(
-        model=LLM_MODEL,
-        google_api_key=GOOGLE_API_KEY,
-        temperature=LLM_TEMPERATURE,
-        max_output_tokens=LLM_MAX_OUTPUT_TOKENS,
-        timeout=LLM_TIMEOUT_LONG,
-        max_retries=LLM_MAX_RETRIES,
-    )
+    return answer_llm()
 
 
 def _format_docs(docs: list[Document]) -> str:
@@ -556,7 +546,8 @@ NODE_LABELS = {
 }
 
 
-def _build_config(session_id: str | None, user_id: str | None, query: str) -> tuple[dict, object]:
+def _build_config(session_id: str | None, user_id: str | None, query: str,
+                  callbacks: list | None = None) -> tuple[dict, object]:
     """
     Build LangGraph invoke/stream config with optional Langfuse handler.
     Returns (config_dict, handler_or_None) — caller should flush() the handler
@@ -574,6 +565,8 @@ def _build_config(session_id: str | None, user_id: str | None, query: str) -> tu
     if handler:
         config["callbacks"] = [handler]
         config["metadata"] = langfuse_metadata
+    if callbacks:
+        config["callbacks"] = [*config.get("callbacks", []), *callbacks]
     return config, handler
 
 
@@ -614,12 +607,13 @@ def run_rag_pipeline(
     user_id: str | None = None,
     agent_id: str | None = None,
     filters: dict | None = None,
+    callbacks: list | None = None,
 ) -> dict:
     """Main entry point for the LangGraph RAG pipeline (non-streaming)."""
     from src.observability import start_trace_span, flush_langfuse
 
     initial_state = _build_initial_state(query, chat_history, agent_id=agent_id, filters=filters)
-    config, lf_handler = _build_config(session_id, user_id, query)
+    config, lf_handler = _build_config(session_id, user_id, query, callbacks)
 
     try:
         # Wrap the whole pipeline in an explicit Langfuse span so user_id /
@@ -722,6 +716,7 @@ def stream_rag_pipeline(
     user_id: str | None = None,
     agent_id: str | None = None,
     filters: dict | None = None,
+    callbacks: list | None = None,
 ):
     """
     Generator that streams pipeline progress AND LLM tokens.
@@ -734,7 +729,7 @@ def stream_rag_pipeline(
 
     initial_state = _build_initial_state(query, chat_history, skip_generation=True,
                                          agent_id=agent_id, filters=filters)
-    config, lf_handler = _build_config(session_id, user_id, query)
+    config, lf_handler = _build_config(session_id, user_id, query, callbacks)
 
     # LangGraph stream yields (node_name, state_update) dicts
     final_state = dict(initial_state)

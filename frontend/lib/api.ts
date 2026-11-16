@@ -61,7 +61,7 @@ function currentSessionToken(): Promise<string | null> {
  * and the request is retried once. If the backend still answers 401, or the
  * session can no longer be renewed, the user is sent to sign in again.
  */
-async function authFetch(
+export async function authFetch(
   url: string,
   token: string | undefined,
   init: RequestInit = {},

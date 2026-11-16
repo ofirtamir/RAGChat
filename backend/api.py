@@ -32,9 +32,11 @@ from src.vector_store import (
     get_all_chunks_for_source,
 )
 from src.observability import initialize_langfuse
-from src import sessions_store
-from .auth import get_current_user, get_current_user_id
-from config import UPLOADS_DIR
+from src import admin_store, library_index, sessions_store
+from src.usage_tracker import UsageCollector
+from .admin_api import admin as admin_router, worker as worker_router
+from .auth import access_state, get_active_user, get_active_user_id, get_current_user, require_admin
+from config import LLM_MODEL, UPLOADS_DIR
 
 # Upload limits — enforced by streaming the file and counting bytes so a
 # malicious client can't just lie about Content-Length.
@@ -59,6 +61,10 @@ app.add_middleware(
 )
 
 initialize_langfuse()
+
+app.include_router(admin_router)
+app.include_router(worker_router)
+library_index.resume_interrupted()
 
 # Size the pool based on available CPUs.  Each streaming request blocks a
 # thread for the duration of the LLM call (I/O-bound), so we allow several
@@ -85,7 +91,7 @@ class ChatResponse(BaseModel):
 
 
 @app.get("/api/agents")
-async def get_agents(user_id: str = Depends(get_current_user_id)):
+async def get_agents(user_id: str = Depends(get_active_user_id)):
     """List available knowledge-base agents with their filter schemas."""
     from src.agents import list_agents, get_agent_vector_store
     agents = []
@@ -112,7 +118,7 @@ class IngestRequest(BaseModel):
 async def ingest_agent_latest(
     agent_id: str,
     request: IngestRequest,
-    user_id: str = Depends(get_current_user_id),
+    _admin: dict = Depends(require_admin),
 ):
     """Pull the latest N documents for this agent straight from gov.il into
     the server's vector store (search → download PDF → local pypdf text
@@ -126,18 +132,79 @@ async def ingest_agent_latest(
 
 
 @app.get("/api/agents/ingest/status")
-async def ingest_status(user_id: str = Depends(get_current_user_id)):
+async def ingest_status(_admin: dict = Depends(require_admin)):
     from src.agent_ingest import get_job_status
     return get_job_status()
+
+
+def _daily_limit(user: dict, settings: dict) -> int:
+    """Questions per day for this user; 0 means unlimited."""
+    return user["daily_limit"] if user["daily_limit"] is not None else settings["default_daily_limit"]
+
+
+@app.get("/api/me")
+async def me(payload: dict = Depends(get_current_user)):
+    """Who the caller is and what they may do — drives the UI (pending screen,
+    admin link, remaining questions)."""
+    state = access_state(payload)
+    settings = admin_store.get_settings()
+    user = state["user"]
+    return {
+        "email": user["email"],
+        "status": user["status"],
+        "is_admin": state["is_admin"],
+        "allowed": state["allowed"],
+        "reason": state["reason"],
+        "daily_limit": 0 if state["is_admin"] else _daily_limit(user, settings),
+        "questions_today": admin_store.questions_today(user["sub"]),
+    }
+
+
+def _enforce_quota(state: dict) -> None:
+    """Refuse the question when the user's daily quota or the monthly budget is used up."""
+    if state["is_admin"]:
+        return
+    settings = admin_store.get_settings()
+    limit = _daily_limit(state["user"], settings)
+    if limit and admin_store.questions_today(state["user"]["sub"]) >= limit:
+        raise HTTPException(
+            status_code=429,
+            detail=f"הגעת למכסת השאלות היומית ({limit}). המכסה מתחדשת מחר.",
+        )
+    budget = settings["monthly_budget_usd"]
+    if budget and admin_store.cost_this_month() >= budget:
+        raise HTTPException(
+            status_code=429,
+            detail="המערכת הגיעה לתקרת השימוש החודשית. פנה למנהל המערכת.",
+        )
+
+
+def _new_usage_collector() -> UsageCollector:
+    settings = admin_store.get_settings()
+    return UsageCollector(fallback_prices=(settings["price_input_per_m"], settings["price_output_per_m"]))
+
+
+def _record_chat_usage(user_id: str, usage: UsageCollector, agent_id: str | None, ok: bool) -> None:
+    try:
+        admin_store.record_usage(
+            user_sub=user_id, kind="chat", model=",".join(sorted(usage.models)) or LLM_MODEL,
+            input_tokens=usage.input_tokens, output_tokens=usage.output_tokens,
+            llm_calls=usage.llm_calls, agent_id=agent_id, ok=ok, cost_usd=usage.cost_usd,
+        )
+    except Exception:
+        pass  # usage accounting must never break an answer
 
 
 @app.post("/api/chat", response_model=ChatResponse)
 async def chat(
     request: ChatRequest,
-    user_id: str = Depends(get_current_user_id),
+    state: dict = Depends(get_active_user),
 ):
     """Run the RAG pipeline and return the result."""
+    _enforce_quota(state)
+    user_id = state["user"]["sub"]
     session_id = request.session_id or str(uuid.uuid4())
+    usage, ok = _new_usage_collector(), False
     try:
         result = run_rag_pipeline(
             query=request.query,
@@ -146,7 +213,9 @@ async def chat(
             user_id=user_id,
             agent_id=request.agent_id,
             filters=request.filters,
+            callbacks=[usage],
         )
+        ok = True
         return ChatResponse(
             answer=result["answer"],
             sources=result.get("sources", []),
@@ -158,6 +227,8 @@ async def chat(
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        _record_chat_usage(user_id, usage, request.agent_id, ok)
 
 
 def _serialize_pydantic(obj):
@@ -179,6 +250,7 @@ def _run_stream_in_thread(
     filters: dict | None = None,
 ):
     """Run the sync stream_rag_pipeline in a thread and push events to a queue."""
+    usage, ok = _new_usage_collector(), False
     try:
         for event in stream_rag_pipeline(
             query=query,
@@ -187,20 +259,27 @@ def _run_stream_in_thread(
             user_id=user_id,
             agent_id=agent_id,
             filters=filters,
+            callbacks=[usage],
         ):
             q.put(event)
+        ok = True
         q.put(None)  # sentinel: done
     except Exception as e:
         q.put({"type": "error", "error": str(e)})
         q.put(None)
+    finally:
+        if user_id:
+            _record_chat_usage(user_id, usage, agent_id, ok)
 
 
 @app.post("/api/chat/stream")
 async def chat_stream(
     request: ChatRequest,
-    user_id: str = Depends(get_current_user_id),
+    state: dict = Depends(get_active_user),
 ):
     """Stream the RAG pipeline stages as SSE events, flushed in real-time."""
+    _enforce_quota(state)
+    user_id = state["user"]["sub"]
     session_id = request.session_id or str(uuid.uuid4())
 
     async def event_generator() -> AsyncGenerator[str, None]:
@@ -337,7 +416,7 @@ async def _stream_upload_to_disk(file: UploadFile, dest: Path) -> int:
 @app.post("/api/upload")
 async def upload_documents(
     files: list[UploadFile] = File(...),
-    _user: dict = Depends(get_current_user),
+    _user: dict = Depends(get_active_user),
 ):
     """Upload and index documents into the vector store.
 
@@ -391,7 +470,7 @@ async def upload_documents(
 
 
 @app.get("/api/documents")
-async def get_documents(_user: dict = Depends(get_current_user)):
+async def get_documents(_user: dict = Depends(get_active_user)):
     """Return stats and list of indexed documents (auth-only)."""
     try:
         sources = list_document_sources()
@@ -410,8 +489,8 @@ async def get_documents(_user: dict = Depends(get_current_user)):
 
 
 @app.delete("/api/documents")
-async def delete_documents(_user: dict = Depends(get_current_user)):
-    """Clear all documents from the vector store (auth-only)."""
+async def delete_documents(_admin: dict = Depends(require_admin)):
+    """Clear all documents from the vector store (admin only)."""
     clear_vector_store()
     return {"status": "cleared"}
 
@@ -429,7 +508,7 @@ class SessionUpsertRequest(BaseModel):
 
 
 @app.get("/api/sessions")
-async def list_user_sessions(user_id: str = Depends(get_current_user_id)):
+async def list_user_sessions(user_id: str = Depends(get_active_user_id)):
     """List all sessions for the authenticated user."""
     return {"sessions": sessions_store.list_sessions(user_id)}
 
@@ -437,7 +516,7 @@ async def list_user_sessions(user_id: str = Depends(get_current_user_id)):
 @app.get("/api/sessions/{session_id}")
 async def get_user_session(
     session_id: str,
-    user_id: str = Depends(get_current_user_id),
+    user_id: str = Depends(get_active_user_id),
 ):
     """Fetch a single session with all its messages."""
     session = sessions_store.get_session(session_id, user_id)
@@ -450,7 +529,7 @@ async def get_user_session(
 async def upsert_user_session(
     session_id: str,
     request: SessionUpsertRequest,
-    user_id: str = Depends(get_current_user_id),
+    user_id: str = Depends(get_active_user_id),
 ):
     """Create or replace a session owned by the authenticated user."""
     if session_id != request.id:
@@ -467,7 +546,7 @@ async def upsert_user_session(
 @app.delete("/api/sessions/{session_id}")
 async def delete_user_session(
     session_id: str,
-    user_id: str = Depends(get_current_user_id),
+    user_id: str = Depends(get_active_user_id),
 ):
     """Delete a session owned by the authenticated user."""
     ok = sessions_store.delete_session(session_id, user_id)
@@ -486,7 +565,7 @@ async def health():
 
 
 @app.get("/api/debug/langfuse")
-async def debug_langfuse():
+async def debug_langfuse(_admin: dict = Depends(require_admin)):
     """
     Diagnostic endpoint — tests every layer of the Langfuse integration.
     Safe to call in production (read-only / single test trace).

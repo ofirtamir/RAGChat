@@ -12,7 +12,7 @@ import logging
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.documents import Document
 
-from config import GOOGLE_API_KEY, LLM_MODEL, LLM_TIMEOUT_SHORT, LLM_MAX_RETRIES
+from src.llm import fast_llm
 from src.prompt_store import load_prompt
 
 logger = logging.getLogger(__name__)
@@ -55,13 +55,7 @@ def _response_text(content) -> str:
 
 
 def _get_reranker_llm() -> ChatGoogleGenerativeAI:
-    return ChatGoogleGenerativeAI(
-        model=LLM_MODEL,
-        google_api_key=GOOGLE_API_KEY,
-        temperature=0,
-        timeout=LLM_TIMEOUT_SHORT,
-        max_retries=LLM_MAX_RETRIES,
-    )
+    return fast_llm()
 
 
 def rerank_documents(

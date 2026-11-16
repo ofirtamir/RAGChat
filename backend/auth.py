@@ -26,11 +26,12 @@ Google OAuth client could be replayed here.
 
 from __future__ import annotations
 
+import hmac
 import logging
 import os
 from functools import lru_cache
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, Header, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from google.auth.transport import requests as google_requests
 from google.oauth2 import id_token as google_id_token
@@ -107,3 +108,80 @@ def get_current_user(
     if creds is None or creds.scheme.lower() != "bearer":
         raise _unauthorized("Missing or malformed Authorization header")
     return verify_google_id_token(creds.credentials)
+
+
+# ── Access control ───────────────────────────────────────────────────────
+# Admins are named by email in the ADMIN_EMAILS env var (comma separated) —
+# never in code. The email comes from the verified Google token, and must be
+# marked verified by Google.
+
+ADMIN_EMAILS = {e.strip().lower() for e in os.getenv("ADMIN_EMAILS", "").split(",") if e.strip()}
+if not ADMIN_EMAILS:
+    logger.warning("ADMIN_EMAILS is not set — the admin console is closed and new users are not gated")
+_WORKER_API_KEY = os.getenv("WORKER_API_KEY", "")
+
+
+def is_admin(payload: dict) -> bool:
+    email = str(payload.get("email") or "").lower()
+    return bool(email) and payload.get("email_verified") is True and email in ADMIN_EMAILS
+
+
+def access_state(payload: dict) -> dict:
+    """Register/refresh the user and work out what they may do right now.
+
+    Returns {"user", "is_admin", "allowed", "reason"}; reason is one of
+    None / "pending" / "blocked".
+    """
+    from src import admin_store
+
+    admin = is_admin(payload)
+    user = admin_store.touch_user(
+        sub=payload["sub"], email=str(payload.get("email") or ""),
+        name=payload.get("name"), picture=payload.get("picture"), is_admin=admin,
+    )
+    reason = None
+    if not admin:
+        if user["status"] == "blocked":
+            reason = "blocked"
+        elif (user["status"] == "pending" and ADMIN_EMAILS
+              and admin_store.get_settings()["require_approval"]):
+            # With no admin configured nobody could approve anyone, so the
+            # approval gate only applies once ADMIN_EMAILS is set.
+            reason = "pending"
+    return {"user": user, "is_admin": admin, "allowed": reason is None, "reason": reason}
+
+
+_DENIED_MESSAGES = {
+    "pending": "החשבון שלך ממתין לאישור מנהל המערכת.",
+    "blocked": "הגישה לחשבון זה נחסמה. פנה למנהל המערכת.",
+}
+
+
+def get_active_user(payload: dict = Depends(get_current_user)) -> dict:
+    """FastAPI dependency for every endpoint that serves the product: the
+    caller must be allowed in (approved, or admin). Returns access_state()."""
+    state = access_state(payload)
+    if not state["allowed"]:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                            detail=_DENIED_MESSAGES[state["reason"]])
+    return state
+
+
+def get_active_user_id(state: dict = Depends(get_active_user)) -> str:
+    return state["user"]["sub"]
+
+
+def require_admin(payload: dict = Depends(get_current_user)) -> dict:
+    """FastAPI dependency: the caller must be one of ADMIN_EMAILS."""
+    if not is_admin(payload):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin only")
+    return payload
+
+
+def require_worker(x_worker_key: str | None = Header(default=None)) -> None:
+    """FastAPI dependency for the local indexing worker (shared secret header)."""
+    if not _WORKER_API_KEY:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                            detail="WORKER_API_KEY is not configured on the server")
+    if not x_worker_key or not hmac.compare_digest(x_worker_key, _WORKER_API_KEY):
+        raise _unauthorized("Bad worker key")
