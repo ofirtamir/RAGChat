@@ -13,7 +13,8 @@ const FIELDS: { key: NumericKey; label: string; hint: string; step: string }[] =
   { key: "monthly_budget_usd", label: "תקרת עלות חודשית ($)", hint: "כשההערכה החודשית מגיעה לתקרה, המערכת מפסיקה לענות למשתמשים (לא לך). 0 = ללא תקרה.", step: "1" },
   { key: "price_input_per_m", label: "מחיר קלט ($ למיליון טוקנים)", hint: "משמש לחישוב הערכת העלות.", step: "0.01" },
   { key: "price_output_per_m", label: "מחיר פלט ($ למיליון טוקנים)", hint: "כולל טוקנים של חשיבה.", step: "0.01" },
-  { key: "price_embedding_per_m", label: "מחיר אינדוקס ($ למיליון טוקנים)", hint: "עלות הפיכת מסמכים לווקטורים.", step: "0.01" },
+  { key: "price_embedding_per_m", label: "מחיר אינדוקס מיידי ($ למיליון טוקנים)", hint: "עד 29 מסמכים בבת אחת: נשלחים מיד.", step: "0.01" },
+  { key: "price_embedding_batch_per_m", label: "מחיר אינדוקס מרוכז ($ למיליון טוקנים)", hint: "30 מסמכים ומעלה: נשלחים ל-Batch API של גוגל, בחצי מחיר, ומסתיימים תוך עד 24 שעות.", step: "0.001" },
 ]
 
 export function SettingsTab({ token }: { token: string | undefined }) {

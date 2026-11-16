@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input"
 import type { AgentFilters } from "@/lib/api"
 import {
   DocStatus, getLibraryAgents, LibraryActionName, LibraryAgent, LibrarySearchResult, LibrarySelection,
-  runLibraryAction, searchLibrary, SyncStatus, syncCatalog,
+  BatchJob, runLibraryAction, searchLibrary, SyncStatus, syncCatalog,
 } from "@/lib/admin-api"
 import { cn } from "@/lib/utils"
 import { DocumentViewer } from "./document-viewer"
@@ -31,6 +31,7 @@ export function LibraryTab({ token }: { token: string | undefined }) {
   const [agents, setAgents] = useState<LibraryAgent[]>([])
   const [agentId, setAgentId] = useState("")
   const [sync, setSync] = useState<SyncStatus | null>(null)
+  const [batches, setBatches] = useState<BatchJob[]>([])
   const [status, setStatus] = useState<DocStatus | null>(null)
   const [q, setQ] = useState("")
   const [filters, setFilters] = useState<AgentFilters>({})
@@ -52,6 +53,7 @@ export function LibraryTab({ token }: { token: string | undefined }) {
       .then(data => {
         setAgents(data.agents)
         setSync(data.sync)
+        setBatches(data.batches ?? [])
         setAgentId(current => current || data.agents[0]?.id || "")
       })
       .catch(e => setError(e.message))
@@ -75,7 +77,7 @@ export function LibraryTab({ token }: { token: string | undefined }) {
     : false
   useEffect(() => {
     if (!moving && !sync?.running) return
-    const timer = setInterval(() => { load(); if (sync?.running) loadAgents() }, 5000)
+    const timer = setInterval(() => { load(); if (sync?.running || moving) loadAgents() }, 5000)
     return () => clearInterval(timer)
   }, [moving, sync?.running, load, loadAgents])
 
@@ -170,6 +172,12 @@ export function LibraryTab({ token }: { token: string | undefined }) {
           <span dir="ltr" className="mx-1 font-mono text-xs">scripts\start-indexer.bat</span>
         </p>
       )}
+      {batches.filter(b => b.state === "open" && b.agent_id === agentId).map(b => (
+        <p key={b.name} className="rounded-xl border bg-card px-4 py-2.5 text-sm text-muted-foreground">
+          {num(b.documents)} מסמכים נשלחו לאינדוקס מרוכז בחצי מחיר ({relativeTime(b.created_at)}).
+          גוגל מעבדת אותם, בדרך כלל תוך כמה שעות ועד 24 שעות; המצב יתעדכן כאן לבד.
+        </p>
+      ))}
       {sync?.error && <ErrorNote message={`עדכון הקטלוג נכשל: ${sync.error}`} />}
       <ErrorNote message={error} />
 

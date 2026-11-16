@@ -62,6 +62,15 @@ LLM_MAX_RETRIES = int(os.getenv("LLM_MAX_RETRIES", "2"))
 
 # Embedding settings
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "models/gemini-embedding-001")
+# gemini-embedding-001 returns 3072 numbers per vector; 768 keeps nearly all the
+# retrieval quality at a quarter of the storage. Changing it means re-embedding.
+EMBEDDING_DIM = int(os.getenv("EMBEDDING_DIM", "768"))
+
+# Document library index (LanceDB on the data volume; vectors + keywords + filters)
+LANCEDB_DIR = DATA_DIR / "lancedb"
+# Indexing this many documents or more at once goes through the Gemini Batch API
+# (half price, finishes within 24 hours); fewer are embedded immediately.
+BATCH_MIN_DOCUMENTS = int(os.getenv("BATCH_MIN_DOCUMENTS", "30"))
 
 # Chunking settings
 CHUNK_SIZE = 1000

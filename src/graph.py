@@ -197,8 +197,9 @@ def chitchat_node(state: GraphState) -> dict:
 def check_documents_node(state: GraphState) -> dict:
     agent_id, _ = _agent_context(state)
     if agent_id:
-        from src.agents import get_agent_vector_store
-        count = get_agent_vector_store(agent_id)._collection.count()
+        from src import hybrid_index
+        from src.agents import get_agent
+        count = hybrid_index.count(get_agent(agent_id))
         empty_msg = "מאגר הידע של הסוכן הזה עדיין ריק — יש להזין אליו מסמכים (scripts/ingest_govil.py)."
     else:
         count = get_document_count()
@@ -224,11 +225,12 @@ def full_doc_detector_node(state: GraphState) -> dict:
     try:
         agent_id, _ = _agent_context(state)
         if agent_id:
-            from src.agents import get_agent_vector_store
-            available = list_document_sources(get_agent_vector_store(agent_id))
-            # Agent collections can hold tens of thousands of documents —
-            # too many to enumerate for the LLM detector. Skip full-doc mode.
-            if len(available) > 200:
+            from src import hybrid_index
+            from src.agents import get_agent
+            available = hybrid_index.sources(get_agent(agent_id))
+            # Agent libraries can hold tens of thousands of documents — too
+            # many to list for the LLM detector. Skip full-doc mode then.
+            if available is None:
                 return {"full_doc_decision": create_fallback_full_doc_decision()}
         else:
             available = list_document_sources()
@@ -256,13 +258,13 @@ def full_doc_retriever_node(state: GraphState) -> dict:
     all_docs = []
 
     agent_id, _ = _agent_context(state)
-    agent_vs = None
-    if agent_id:
-        from src.agents import get_agent_vector_store
-        agent_vs = get_agent_vector_store(agent_id)
-
     for source in decision.target_sources:
-        chunks = get_all_chunks_for_source(source, vs=agent_vs)
+        if agent_id:
+            from src import hybrid_index
+            from src.agents import get_agent
+            chunks = hybrid_index.chunks_for_source(get_agent(agent_id), source)
+        else:
+            chunks = get_all_chunks_for_source(source)
         all_docs.extend(chunks)
 
     return {
@@ -298,7 +300,7 @@ def retriever_node(state: GraphState) -> dict:
     agent_id, where = _agent_context(state)
 
     def _retrieve_one(sq: str) -> list[Document]:
-        docs = retrieve_for_query(sq, agent_id=agent_id, where=where)
+        docs = retrieve_for_query(sq, agent_id=agent_id, where=where, filters=state.get("filters"))
         for doc in docs:
             doc.metadata["_sub_query"] = sq
         return docs
