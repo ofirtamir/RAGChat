@@ -7,6 +7,7 @@ import os
 import sys
 import uuid
 import json
+import re
 import asyncio
 from pathlib import Path
 from typing import AsyncGenerator
@@ -554,6 +555,27 @@ async def delete_user_session(
     if not ok:
         raise HTTPException(status_code=404, detail="Session not found")
     return {"status": "deleted"}
+
+
+@app.get("/api/sources/{agent_id}/{key}")
+def get_source_document(agent_id: str, key: str, _user: dict = Depends(get_active_user)):
+    """A cited library document as the parser saw it, plus links to the original
+    files — what the chat opens when a user clicks a citation."""
+    from src.agents import get_agent
+    from src.library_store import get_document
+
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", agent_id) or get_agent(agent_id) is None:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    doc = get_document(agent_id, key)
+    if doc is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+    return {
+        "record_key": doc["record_key"],
+        "title": doc["title"],
+        "pages": doc.get("pages"),
+        "files": doc["files"],
+        "parsed_pages": doc.get("parsed_pages", []),
+    }
 
 
 @app.get("/api/health")

@@ -7,75 +7,95 @@ import rehypeRaw from "rehype-raw"
 import { Message, CitationDetail } from "@/types/chat"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 import { cn } from "@/lib/utils"
-import { FileText, Search, MessageCircle, ChevronDown } from "lucide-react"
+import { FileText, Search, MessageCircle, ChevronDown, ExternalLink } from "lucide-react"
+import { SourceViewer } from "@/components/source-viewer"
 
 interface MessageBubbleProps {
   message: Message
 }
 
-function escapeHtmlAttr(str: string): string {
-  return str
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;")
-    .replace(/\n/g, " ")
-}
-
-function injectCitations(content: string, citations?: CitationDetail[]): string {
+/** [n] / [n, m] → <cite data-num="n">n</cite>; the badge looks the citation up by number. */
+function injectCitations(content: string): string {
   const parts = content.split(/(```[\s\S]*?```|`[^`]+`)/g)
   return parts
     .map((part, i) => {
       if (i % 2 === 1) return part
-      return part.replace(/\[(\d+(?:\s*,\s*\d+)*)\]/g, (_, nums) => {
-        return nums.split(/\s*,\s*/).map((num: string) => {
-          const idx = parseInt(num, 10) - 1
-          const cite = citations?.[idx]
-          const src = escapeHtmlAttr(cite?.source ?? `מקור ${num}`)
-          const snippet = escapeHtmlAttr(cite?.snippet ?? "")
-          return `<cite title="${src}" data-snippet="${snippet}">${num}</cite>`
-        }).join("")
-      })
+      return part.replace(/\[(\d+(?:\s*,\s*\d+)*)\]/g, (_, nums) =>
+        nums.split(/\s*,\s*/).map((num: string) => `<cite data-num="${num}">${num}</cite>`).join("")
+      )
     })
     .join("")
 }
 
-// Small pill that shows source name + chunk snippet on hover
-function CiteBadge({ children, title, snippet }: { children: React.ReactNode; title?: string; snippet?: string }) {
+// Matches snippet_len in src/graph.py — a snippet this long was cut off.
+const SNIPPET_LIMIT = 700
+
+/** Numbered pill: hover shows the cited passage, click opens the source document. */
+function CiteBadge({ num, citation, onOpen }: {
+  num: string
+  citation?: CitationDetail
+  onOpen: (citation: CitationDetail) => void
+}) {
+  const title = citation?.source ?? `מקור ${num}`
+  const snippet = citation?.snippet ?? ""
+  const canOpen = !!(citation?.agent_id && citation.record_key)
+  const [tipOpen, setTipOpen] = useState(false)
+  const open = () => {
+    if (!canOpen) return
+    setTipOpen(false)
+    onOpen(citation!)
+  }
+
   return (
     <TooltipProvider delayDuration={150}>
-      <Tooltip>
+      <Tooltip open={tipOpen} onOpenChange={setTipOpen}>
         <TooltipTrigger asChild>
           <sup
+            role={canOpen ? "button" : undefined}
+            tabIndex={canOpen ? 0 : undefined}
+            onClick={open}
+            onKeyDown={e => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), open())}
             className={cn(
               "relative -top-px inline-flex items-center justify-center align-baseline",
               "mx-0.5 h-[1.15rem] min-w-[1.15rem] rounded-full px-1",
               "bg-muted text-muted-foreground hover:bg-foreground hover:text-background transition-colors",
-              "text-[10px] font-medium leading-none tabular-nums",
-              "cursor-default select-none"
+              "text-[10px] font-medium leading-none tabular-nums select-none",
+              canOpen ? "cursor-pointer" : "cursor-default"
             )}
           >
-            {children}
+            {num}
           </sup>
         </TooltipTrigger>
-        {(title || snippet) && (
-          <TooltipContent side="top" className="max-w-[350px] border bg-popover p-3 text-popover-foreground shadow-lg">
-            <div className="space-y-1.5" dir="rtl">
-              {title && (
-                <p className="flex items-center gap-1.5 text-xs font-medium">
-                  <FileText className="h-3 w-3 shrink-0 text-muted-foreground" />
-                  {title}
-                </p>
-              )}
-              {snippet && (
-                <p className="line-clamp-3 text-[11px] font-normal leading-relaxed text-muted-foreground">
-                  {snippet}…
-                </p>
-              )}
-            </div>
-          </TooltipContent>
-        )}
+        <TooltipContent
+          side="top"
+          collisionPadding={12}
+          className="flex w-[min(30rem,calc(100vw-2rem))] flex-col border bg-popover p-0 text-popover-foreground shadow-lg"
+        >
+          <div dir="rtl" className="flex min-h-0 flex-col">
+            <p className="flex items-start gap-1.5 border-b px-4 py-3 text-[13px] font-semibold leading-snug">
+              <FileText className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+              {title}
+            </p>
+            {snippet && (
+              <p className="scrollbar-thin max-h-[min(18rem,45vh)] overflow-y-auto whitespace-pre-line px-4 py-3 text-[12.5px] font-normal leading-relaxed text-muted-foreground">
+                {snippet}{snippet.length >= SNIPPET_LIMIT - 10 && "…"}
+              </p>
+            )}
+            {canOpen && (
+              <button
+                type="button"
+                onClick={open}
+                className="flex items-center gap-1.5 border-t px-4 py-2.5 text-[12.5px] font-medium text-blue-600 transition-colors hover:bg-accent dark:text-blue-400"
+              >
+                <ExternalLink className="h-3.5 w-3.5" />
+                פתח את המסמך
+                {citation?.page != null && (
+                  <span className="font-normal text-muted-foreground">· עמוד {citation.page + 1}</span>
+                )}
+              </button>
+            )}
+          </div>
+        </TooltipContent>
       </Tooltip>
     </TooltipProvider>
   )
@@ -100,6 +120,7 @@ function RouteLabel({ message }: { message: Message }) {
 export function MessageBubble({ message }: MessageBubbleProps) {
   const [showDetails, setShowDetails] = useState(false)
   const [showThinking, setShowThinking] = useState(false)
+  const [openCitation, setOpenCitation] = useState<CitationDetail | null>(null)
   const isUser = message.role === "user"
   const hasDetails = message.route || message.sources?.length || message.rewritten || message.fullDocDecision
   const hasThinking = message.thinkingSteps && message.thinkingSteps.length > 0
@@ -122,8 +143,8 @@ export function MessageBubble({ message }: MessageBubbleProps) {
     )
   }
 
-  // Pre-process content: [n] → <cite title="…" data-snippet="…">n</cite>
-  const processedContent = injectCitations(message.content, message.citations)
+  // Pre-process content: [n] → <cite data-num="n">n</cite>
+  const processedContent = injectCitations(message.content)
 
   return (
     <div className="flex w-full flex-col gap-2">
@@ -169,15 +190,17 @@ export function MessageBubble({ message }: MessageBubbleProps) {
           remarkPlugins={[remarkGfm]}
           rehypePlugins={[rehypeRaw]}
           components={{
-            // Citation badge — rendered from <cite title="…" data-snippet="…">n</cite>
-            cite: ({ node, children }) => (
-              <CiteBadge
-                title={(node as any)?.properties?.title}
-                snippet={(node as any)?.properties?.dataSnippet}
-              >
-                {children}
-              </CiteBadge>
-            ),
+            // Citation badge — rendered from <cite data-num="n">n</cite>
+            cite: ({ node }) => {
+              const num = String((node as any)?.properties?.dataNum ?? "")
+              return (
+                <CiteBadge
+                  num={num}
+                  citation={message.citations?.[parseInt(num, 10) - 1]}
+                  onOpen={setOpenCitation}
+                />
+              )
+            },
             h1: ({ children }) => (
               <h1 className="mb-3 mt-6 text-xl font-semibold text-foreground first:mt-0">{children}</h1>
             ),
@@ -254,6 +277,8 @@ export function MessageBubble({ message }: MessageBubbleProps) {
           {processedContent}
         </ReactMarkdown>
       </div>
+
+      <SourceViewer citation={openCitation} onClose={() => setOpenCitation(null)} />
 
       {/* Route label · sources toggle · time */}
       {(message.route || hasDetails) && (

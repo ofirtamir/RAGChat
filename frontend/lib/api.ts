@@ -1,5 +1,5 @@
 import { getSession as getAuthSession } from "next-auth/react"
-import { ThinkingStep } from "@/types/chat"
+import { CitationDetail, ThinkingStep } from "@/types/chat"
 import { redirectToSignIn } from "@/lib/auth-redirect"
 
 // Backend base URL (override via NEXT_PUBLIC_BACKEND_ORIGIN, e.g. http://localhost:8000)
@@ -12,7 +12,7 @@ const API_BASE = `${BACKEND_ORIGIN}/api`
 export interface ChatApiResponse {
   answer: string
   sources: string[]
-  citations?: { source: string; snippet: string }[]
+  citations?: CitationDetail[]
   route: { needs_retrieval: boolean; reasoning: string } | null
   rewritten: { original_query: string; rewritten_queries: string[]; reasoning: string } | null
   full_doc_decision: { needs_full_document: boolean; target_sources: string[]; reasoning: string } | null
@@ -285,6 +285,28 @@ export async function uploadFiles(
     const err = await res.json().catch(() => ({ detail: "Upload failed" }))
     throw new Error(err.detail || "Upload failed")
   }
+  return res.json()
+}
+
+export interface SourceDocument {
+  record_key: string
+  title: string
+  pages: number | null
+  files: { url: string; name: string; ext: string }[]
+  parsed_pages: { number: number; markdown: string }[]
+}
+
+/** A cited library document — parsed pages plus links to the original files. */
+export async function getSourceDocument(
+  agentId: string,
+  key: string,
+  token: string | undefined,
+): Promise<SourceDocument> {
+  const res = await authFetch(
+    `${API_BASE}/sources/${encodeURIComponent(agentId)}/${encodeURIComponent(key)}`,
+    token,
+  )
+  if (!res.ok) throw new Error(res.status === 404 ? "המסמך לא נמצא" : "טעינת המסמך נכשלה")
   return res.json()
 }
 

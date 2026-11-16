@@ -1,6 +1,10 @@
 export interface CitationDetail {
   source: string
   snippet: string
+  /** Present for library documents — lets the UI open the cited document. */
+  agent_id?: string
+  record_key?: string
+  page?: number | null
 }
 
 export interface Message {
