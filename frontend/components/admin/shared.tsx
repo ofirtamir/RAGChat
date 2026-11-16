@@ -83,7 +83,7 @@ export function IndexCostSummary({ cost, catalogTotal, indexed, parse }: {
       <StatCard label="צפי לאינדוקס כל הקטלוג" value={cost.documents ? usdPrecise(cost.projected_catalog_usd) : "—"}
         hint={`${num(catalogTotal)} מסמכים, לפי הממוצע`} />
       <StatCard label="עלות הפרסור" value={usdPrecise(parse?.total_usd ?? 0)}
-        hint={parse?.llm_tables ? `במחשב שלך; ${num(parse.llm_tables)} טבלאות קשות נקראו ב-Gemini` : "רץ במחשב שלך, בחינם"} />
+        hint={parse?.llm_tables ? `במחשב שלך; ${num(parse.llm_tables)} טבלאות קשות ותמונות נקראו ב-Gemini` : "רץ במחשב שלך, בחינם"} />
     </div>
   )
 }

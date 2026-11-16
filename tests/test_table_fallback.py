@@ -83,14 +83,14 @@ def test_worker_replaces_only_hard_tables_and_reports_cost(monkeypatch, tmp_path
     import index_worker
 
     hard, fine = table(["word coverage 80%"]), table([], markdown=GOOD)
-    pages = [SimpleNamespace(number=0, markdown=f"טקסט\n\n{LOCAL}\n\nעוד\n\n{GOOD}", tables=[hard, fine])]
+    pages = [SimpleNamespace(number=0, markdown=f"טקסט\n\n{LOCAL}\n\nעוד\n\n{GOOD}", tables=[hard, fine], images=[])]
     pdf = tmp_path / "k.pdf"
     import pymupdf
     d = pymupdf.open()
     d.new_page()
     d.save(pdf)
 
-    monkeypatch.setattr("src.pdf_parser.parse_pdf", lambda path: pages)
+    monkeypatch.setattr("src.pdf_parser.parse_pdf", lambda path, **kw: pages)
     monkeypatch.setattr(table_fallback, "reread_table",
                         lambda page, t: table_fallback.Repair(GOOD.replace("שטח", "שטח מ\"ר"), 0.001, 1, 1))
     client = SimpleNamespace(download=lambda url: b"")

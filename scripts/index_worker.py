@@ -108,16 +108,61 @@ def repair_hard_tables(path: Path, parsed_pages, budget: int) -> dict:
     return out
 
 
+def read_images(path: Path, parsed_pages, budget: int) -> dict:
+    """Put the content of pictured tables/paragraphs in place of their markers.
+    Free filtering and the on-disk cache come first; at most `budget` paid calls.
+    Returns {"read", "calls", "cost_usd", "unread": [(page, problem)]}."""
+    import pymupdf
+
+    from src import image_reader
+    from src.pdf_parser import strip_image_markers
+
+    out = {"read": 0, "calls": 0, "cost_usd": 0.0, "unread": []}
+    images = [(p, i) for p in parsed_pages for i in p.images]
+    if not images:
+        return out
+    unavailable = None
+    with pymupdf.open(path) as pdf:
+        for page, image in images:
+            pdf_page, text = pdf[page.number], image_reader.cached(image.digest)
+            if text is None:
+                text = ""
+                if not image_reader.looks_like_document(pdf_page, pymupdf.Rect(image.bbox)):
+                    pass                                   # a map / photo / plan: nothing to read
+                elif unavailable:
+                    out["unread"].append((page.number, "picture with text not read (Gemini unavailable)"))
+                elif out["calls"] >= budget:
+                    out["unread"].append((page.number, "picture with text not read (paid reading off or over the limit)"))
+                else:
+                    try:
+                        reading = image_reader.read_image(pdf_page, image)
+                        text = reading.text
+                        out["calls"] += 1
+                        out["cost_usd"] += reading.cost_usd
+                    except Exception as exc:
+                        unavailable = str(exc)[:80]
+                        print(f"    Gemini image read failed ({unavailable}); this document's other pictures stay unread")
+                        out["unread"].append((page.number, "picture with text not read (Gemini unavailable)"))
+            if text:
+                out["read"] += 1
+            page.markdown = page.markdown.replace(image.marker, text, 1)
+    for page in parsed_pages:
+        page.markdown = strip_image_markers(page.markdown)
+    return out
+
+
 def process(doc: dict, client: GovilClient, out_dir: Path, llm_tables: bool = True) -> dict:
-    """Download every PDF of one record and parse it locally. Tables the local
-    parser could not read are re-read by a cheap Gemini model (only those; at most
-    TABLE_FALLBACK_MAX_PER_DOC per document). Returns the /result payload."""
-    from src import table_fallback
-    from src.pdf_parser import parse_pdf
+    """Download every PDF of one record and parse it locally. Paid Gemini calls are
+    used only where the local parse has nothing usable: tables it could not read
+    (at most TABLE_FALLBACK_MAX_PER_DOC) and tables/text pasted as pictures (after a
+    free filter, at most IMAGE_READER_MAX_PER_DOC). Returns the /result payload."""
+    from src import image_reader, table_fallback
+    from src.pdf_parser import parse_pdf, strip_image_markers
 
     pages, problems, tables = [], [], 0
     fixed, cost = 0, 0.0
     budget = table_fallback.MAX_TABLES_PER_DOCUMENT if llm_tables else 0
+    image_budget = image_reader.MAX_IMAGES_PER_DOCUMENT if llm_tables else 0
     pdfs = [f for f in doc["files"] if f.get("ext", "pdf") in ("pdf", "")]
     if not pdfs:
         return {"ok": False, "error": "לרשומה אין קובץ PDF"}
@@ -125,18 +170,27 @@ def process(doc: dict, client: GovilClient, out_dir: Path, llm_tables: bool = Tr
         path = out_dir / (f"{doc['record_key']}.pdf" if i == 0 else f"{doc['record_key']}_{i}.pdf")
         if not path.exists() or path.stat().st_size == 0:
             path.write_bytes(download_with_retry(client, f["url"]))
-        parsed = parse_pdf(path)
+        parsed = parse_pdf(path, image_markers=True)
         repaired = repair_hard_tables(path, parsed, budget)
         budget -= repaired["tried"]
         fixed += repaired["fixed"]
         cost += repaired["cost_usd"]
+        pictures = read_images(path, parsed, image_budget)
+        image_budget -= pictures["calls"]
+        fixed += pictures["read"]
+        cost += pictures["cost_usd"]
+        unread = {}
+        for page_no, problem in pictures["unread"]:
+            unread.setdefault(page_no, []).append(problem)
         for page in parsed:
             number = len(pages)
             tables += len(page.tables)
             for t in page.tables:
                 if t.problems and id(t) not in repaired["fixed_ids"]:
                     problems.append({"page": number, "problems": t.problems})
-            pages.append({"number": number, "markdown": page.markdown})
+            if page.number in unread:
+                problems.append({"page": number, "problems": unread[page.number]})
+            pages.append({"number": number, "markdown": strip_image_markers(page.markdown)})
     return {"ok": True, "pages": pages, "tables": tables, "problems": problems,
             "llm_tables": fixed, "parse_cost_usd": round(cost, 6)}
 
