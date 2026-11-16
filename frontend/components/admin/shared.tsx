@@ -68,10 +68,11 @@ export function StatCard({ label, value, hint, tone }: {
 }
 
 /** Indexing cost so far, per document, and what the whole catalog would cost at that rate. */
-export function IndexCostSummary({ cost, catalogTotal, indexed }: {
+export function IndexCostSummary({ cost, catalogTotal, indexed, parse }: {
   cost: import("@/lib/admin-api").IndexCost
   catalogTotal: number
   indexed: number
+  parse?: { total_usd: number; llm_tables: number }
 }) {
   return (
     <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
@@ -81,7 +82,8 @@ export function IndexCostSummary({ cost, catalogTotal, indexed }: {
         hint={`${num(cost.tokens)} טוקנים · ${num(indexed)} מסמכים`} />
       <StatCard label="צפי לאינדוקס כל הקטלוג" value={cost.documents ? usdPrecise(cost.projected_catalog_usd) : "—"}
         hint={`${num(catalogTotal)} מסמכים, לפי הממוצע`} />
-      <StatCard label="עלות הפרסור" value="$0" hint="רץ במחשב שלך" />
+      <StatCard label="עלות הפרסור" value={usdPrecise(parse?.total_usd ?? 0)}
+        hint={parse?.llm_tables ? `במחשב שלך; ${num(parse.llm_tables)} טבלאות קשות נקראו ב-Gemini` : "רץ במחשב שלך, בחינם"} />
     </div>
   )
 }

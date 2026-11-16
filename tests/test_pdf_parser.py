@@ -76,3 +76,32 @@ def test_multi_row_header_above_coefficient_rows():
     hdr, body_start = _header_rows(grid)
     assert hdr == [2]
     assert body_start == 3
+
+
+class _FakeTable:
+    """Just enough of a PyMuPDF table for _build_table: one row of cells, each a bbox."""
+
+    def __init__(self, rows):
+        self.header = type("H", (), {"external": False, "cells": []})()
+        self.rows = [type("R", (), {"cells": r})() for r in rows]
+        self.bbox = (0, 0, 300, 10 * len(rows))
+
+
+def test_text_first_row_over_numbers_becomes_the_header():
+    from src.pdf_parser import _build_table
+
+    texts = [["ח/8/1", "ח/4/1", "כתובת", "גוש-חלקה"],
+             ["$300", "$220", "עמוס 22", "6019-228"],
+             ["$300", "$220", "יחזקאל 11", "6019-166"]]
+    rows, words = [], []
+    for r, row in enumerate(texts):
+        cells = []
+        for c, text in enumerate(row):
+            box = (c * 70, r * 10, c * 70 + 60, r * 10 + 8)
+            cells.append(box)
+            words.append((box[0] + 1, box[1] + 1, box[2] - 1, box[3] - 1, text))
+        rows.append(cells)
+    parsed = _build_table(_FakeTable(rows), words)
+    first = parsed.markdown.splitlines()[0]
+    assert "גוש-חלקה" in first and "כתובת" in first
+    assert not any("without header" in p for p in parsed.problems)

@@ -71,6 +71,9 @@ export function DocumentViewer({ agentId, recordKey, token, onClose, onAction }:
                   {doc.index_cost_usd != null && (
                     <span>· עלות אינדוקס {usdPrecise(doc.index_cost_usd)} ({num(doc.embed_tokens)} טוקנים)</span>
                   )}
+                  {!!doc.llm_tables && (
+                    <span>· {num(doc.llm_tables)} טבלאות נקראו ב-Gemini ({usdPrecise(doc.parse_cost_usd)})</span>
+                  )}
                   {doc.parsed_at && <span>· פורסר {shortDate(doc.parsed_at)}</span>}
                 </>
               )}

@@ -182,7 +182,8 @@ export function LibraryTab({ token }: { token: string | undefined }) {
       <ErrorNote message={error} />
 
       {result && result.index_cost.documents > 0 && (
-        <IndexCostSummary cost={result.index_cost} catalogTotal={result.catalog_total} indexed={result.counts.indexed} />
+        <IndexCostSummary cost={result.index_cost} catalogTotal={result.catalog_total}
+          indexed={result.counts.indexed} parse={result.parse_cost} />
       )}
 
       {/* status chips */}

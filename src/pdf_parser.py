@@ -35,6 +35,8 @@ MAX_COLUMNS = 20
 class ParsedTable:
     markdown: str
     problems: list[str] = field(default_factory=list)
+    bbox: tuple[float, float, float, float] | None = None  # page coordinates, for re-reading the region
+    numbers: list[str] = field(default_factory=list)       # numeric cell values, to check a re-read
 
 
 @dataclass
@@ -234,6 +236,15 @@ def _build_table(table, words) -> ParsedTable:
         else:
             body.append(vals)
 
+    # No header found, but the first row has more text cells (labels) than the row
+    # under it: it is the header.
+    def text_cells(row):
+        return sum(1 for v in row if v and not _is_num(v))
+
+    if not any(header) and len(body) >= 2 and text_cells(body[0]) >= 2 \
+            and text_cells(body[0]) > text_cells(body[1]):
+        header, body = body[0], body[1:]
+
     problems = []
     if coverage < MIN_COVERAGE:
         problems.append(f"word coverage {coverage:.0%}")
@@ -241,8 +252,7 @@ def _build_table(table, words) -> ParsedTable:
         problems.append(f"{len(cols)} columns")
     if not body:
         problems.append("no data rows")
-    unlabeled = sum(1 for i, col in enumerate(cols)
-                    if not header[i] and any(col[r] for r in range(nrow) if r not in hdr))
+    unlabeled = sum(1 for i, v in enumerate(header) if not v and any(row[i] for row in body))
     if unlabeled:
         problems.append(f"{unlabeled} columns without header")
 
@@ -251,7 +261,8 @@ def _build_table(table, words) -> ParsedTable:
 
     md = f"**{' '.join(caption)}**\n\n" if caption else ""
     md += md_row(header) + "\n|" + "---|" * len(header) + "\n" + "\n".join(md_row(v) for v in body)
-    return ParsedTable(markdown=md, problems=problems)
+    numbers = [w[4] for w in in_table if re.search(r"\d", w[4])]
+    return ParsedTable(markdown=md, problems=problems, bbox=tuple(table.bbox), numbers=numbers)
 
 
 # ---------- pages ----------
