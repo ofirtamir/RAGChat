@@ -5,6 +5,7 @@ import Link from "next/link"
 import { signOut, useSession } from "next-auth/react"
 import { ArrowRight, BarChart3, FileText, LayoutDashboard, Settings, Users } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { ThemeToggle } from "@/components/theme-toggle"
 import { getMe, Me } from "@/lib/admin-api"
 import { cn } from "@/lib/utils"
 import { LibraryTab } from "./library-tab"
@@ -48,7 +49,7 @@ export function AdminConsole() {
     return (
       <Centered>
         <p className="text-lg font-semibold">הדף לא נמצא</p>
-        <Link href="/" className="text-sm text-sky-600 hover:underline">חזרה לצ׳אט</Link>
+        <Link href="/" className="text-sm underline underline-offset-4 hover:text-muted-foreground">חזרה לצ׳אט</Link>
       </Centered>
     )
   }
@@ -61,18 +62,21 @@ export function AdminShell({ token }: { token: string | undefined }) {
   const [tab, setTab] = useState<TabId>("overview")
 
   return (
-    <div dir="rtl" className="min-h-screen bg-muted/20">
-      <header className="sticky top-0 z-10 border-b bg-background">
-        <div className="mx-auto flex max-w-7xl flex-wrap items-center gap-x-6 gap-y-2 px-4 py-3">
-          <h1 className="text-lg font-bold">ניהול המערכת</h1>
-          <nav className="flex flex-wrap gap-1">
+    <div dir="rtl" className="min-h-dvh bg-sidebar">
+      <header className="sticky top-0 z-10 border-b bg-sidebar/85 backdrop-blur-md">
+        <div className="mx-auto flex max-w-7xl flex-wrap items-center gap-x-6 gap-y-2 px-4 py-3 sm:px-6">
+          <h1 className="text-[17px] font-semibold tracking-tight">ניהול המערכת</h1>
+          {/* Tabs: own scrollable row on phones, inline on wider screens */}
+          <nav className="order-last -mx-4 flex [scrollbar-width:none] [&::-webkit-scrollbar]:hidden w-[calc(100%+2rem)] sm:-mx-6 sm:w-[calc(100%+3rem)] sm:px-6 gap-1 overflow-x-auto px-4 md:order-none md:mx-0 md:w-auto md:px-0">
             {TABS.map(t => (
               <button
                 key={t.id}
                 onClick={() => setTab(t.id)}
                 className={cn(
-                  "flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm transition-colors",
-                  tab === t.id ? "bg-sky-100 font-medium text-sky-800 dark:bg-sky-950 dark:text-sky-200" : "hover:bg-accent",
+                  "flex shrink-0 items-center gap-1.5 rounded-full px-3.5 py-1.5 text-sm transition-colors",
+                  tab === t.id
+                    ? "bg-foreground text-background"
+                    : "text-muted-foreground hover:bg-accent hover:text-foreground",
                 )}
               >
                 <t.icon className="h-4 w-4" />
@@ -81,13 +85,19 @@ export function AdminShell({ token }: { token: string | undefined }) {
             ))}
           </nav>
           <span className="flex-1" />
-          <Link href="/" className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground">
-            <ArrowRight className="h-4 w-4" />
-            חזרה לצ׳אט
-          </Link>
+          <div className="flex items-center gap-1.5">
+            <ThemeToggle />
+            <Link
+              href="/"
+              className="flex h-8 items-center gap-1 rounded-full border bg-background px-3 text-[13px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            >
+              <ArrowRight className="h-4 w-4" />
+              חזרה לצ׳אט
+            </Link>
+          </div>
         </div>
       </header>
-      <main className="mx-auto max-w-7xl px-4 py-6">
+      <main className="mx-auto max-w-7xl px-4 py-6 sm:px-6 sm:py-8">
         {tab === "overview" && <OverviewTab token={token} onNavigate={setTab} />}
         {tab === "library" && <LibraryTab token={token} />}
         {tab === "users" && <UsersTab token={token} />}
@@ -100,7 +110,7 @@ export function AdminShell({ token }: { token: string | undefined }) {
 
 function Centered({ children }: { children: React.ReactNode }) {
   return (
-    <div dir="rtl" className="flex min-h-screen flex-col items-center justify-center gap-4 text-center">
+    <div dir="rtl" className="flex min-h-dvh flex-col items-center justify-center gap-4 bg-sidebar px-6 text-center">
       {children}
     </div>
   )

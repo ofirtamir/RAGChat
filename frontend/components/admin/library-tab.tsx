@@ -12,7 +12,8 @@ import {
 import { cn } from "@/lib/utils"
 import { DocumentViewer } from "./document-viewer"
 import {
-  DOC_STATUS, DOC_STATUS_ORDER, ErrorNote, IndexCostSummary, num, Pill, relativeTime, shortDate, usdPrecise,
+  CARD, DOC_STATUS, DOC_STATUS_ORDER, ErrorNote, IndexCostSummary, num, Pill, relativeTime, shortDate,
+  TONE, usdPrecise,
 } from "./shared"
 
 const ACTIONS: { name: LibraryActionName; label: string; from: DocStatus[]; confirm?: string }[] = [
@@ -24,7 +25,7 @@ const ACTIONS: { name: LibraryActionName; label: string; from: DocStatus[]; conf
 ]
 
 const selectClass =
-  "h-9 rounded-md border border-input bg-background px-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+  "h-9 rounded-lg border border-input bg-background px-2.5 text-sm transition-colors focus-visible:border-ring focus-visible:outline-none"
 
 export function LibraryTab({ token }: { token: string | undefined }) {
   const [agents, setAgents] = useState<LibraryAgent[]>([])
@@ -150,12 +151,10 @@ export function LibraryTab({ token }: { token: string | undefined }) {
             {agents.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
           </select>
         )}
-        <h2 className="text-lg font-semibold">{agent?.name}</h2>
+        <h2 className="text-xl font-semibold tracking-tight">{agent?.name}</h2>
         <span className="flex-1" />
         {result && (
-          <Pill className={result.worker.online
-            ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300"
-            : "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300"}>
+          <Pill className={result.worker.online ? TONE.emerald : TONE.neutral}>
             סוכן האינדוקס {result.worker.online ? "מחובר" : `לא מחובר · נראה ${relativeTime(result.worker.last_seen)}`}
           </Pill>
         )}
@@ -166,7 +165,7 @@ export function LibraryTab({ token }: { token: string | undefined }) {
       </div>
 
       {result && !result.worker.online && result.counts.queued > 0 && (
-        <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-300">
+        <p className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-2.5 text-sm text-amber-800 dark:border-amber-400/20 dark:bg-amber-400/10 dark:text-amber-300">
           {num(result.counts.queued)} מסמכים ממתינים בתור. כדי שיורדו ויפורסרו, הפעל במחשב שלך את
           <span dir="ltr" className="mx-1 font-mono text-xs">scripts\start-indexer.bat</span>
         </p>
@@ -180,21 +179,15 @@ export function LibraryTab({ token }: { token: string | undefined }) {
 
       {/* status chips */}
       <div className="flex flex-wrap gap-2">
-        <button
-          onClick={() => setStatus(null)}
-          className={cn("rounded-full border px-3 py-1 text-xs", status === null && "border-sky-500 bg-sky-50 dark:bg-sky-950")}
-        >
+        <button onClick={() => setStatus(null)} className="chip" data-active={status === null}>
           הכל: {num(result?.catalog_total)}
         </button>
         {DOC_STATUS_ORDER.map(s => (
           <button
             key={s}
             onClick={() => setStatus(status === s ? null : s)}
-            className={cn(
-              "rounded-full border px-3 py-1 text-xs",
-              status === s && "border-sky-500 bg-sky-50 dark:bg-sky-950",
-              !result?.counts[s] && "opacity-50",
-            )}
+            className={cn("chip", !result?.counts[s] && status !== s && "opacity-50")}
+            data-active={status === s}
           >
             {DOC_STATUS[s].label}: {num(result?.counts[s])}
           </button>
@@ -202,7 +195,7 @@ export function LibraryTab({ token }: { token: string | undefined }) {
       </div>
 
       {/* filters */}
-      <div className="flex flex-wrap items-end gap-2 rounded-xl border bg-card p-3">
+      <div className={cn(CARD, "flex flex-wrap items-end gap-3 p-4")}>
         <label className="grow text-xs text-muted-foreground">
           חיפוש בכותרת
           <Input className="mt-1 h-9" value={q} onChange={e => setQ(e.target.value)} placeholder="שם צד, רחוב, גוש…" />
@@ -271,30 +264,30 @@ export function LibraryTab({ token }: { token: string | undefined }) {
         {selected.size > 0 && (
           <Button size="sm" variant="ghost" onClick={() => setSelected(new Set())}>בטל בחירה</Button>
         )}
-        {notice && <span className="text-xs text-emerald-600">{notice}</span>}
+        {notice && <span className="text-xs text-emerald-600 dark:text-emerald-400">{notice}</span>}
       </div>
 
       {/* table */}
-      <div className="overflow-x-auto rounded-xl border bg-card">
-        <table className="w-full text-sm">
-          <thead className="border-b bg-muted/40 text-xs text-muted-foreground">
+      <div className={cn(CARD, "overflow-x-auto")}>
+        <table className="data-table">
+          <thead>
             <tr>
-              <th className="w-8 p-2">
+              <th className="w-10">
                 <input type="checkbox" checked={allOnPageSelected} onChange={togglePage} aria-label="בחר את כל העמוד" />
               </th>
-              <th className="p-2 text-right font-medium">מסמך</th>
-              <th className="p-2 text-right font-medium">פרסום</th>
-              <th className="p-2 text-right font-medium">מצב</th>
-              <th className="p-2 text-right font-medium">עמודים</th>
-              <th className="p-2 text-right font-medium">טבלאות</th>
-              <th className="p-2 text-right font-medium">קטעים</th>
-              <th className="p-2 text-right font-medium">עלות אינדוקס</th>
+              <th>מסמך</th>
+              <th>פרסום</th>
+              <th>מצב</th>
+              <th>עמודים</th>
+              <th>טבלאות</th>
+              <th>קטעים</th>
+              <th>עלות אינדוקס</th>
             </tr>
           </thead>
           <tbody>
             {docs.map(d => (
-              <tr key={d.record_key} className="border-b last:border-0 hover:bg-accent/50">
-                <td className="p-2 text-center">
+              <tr key={d.record_key}>
+                <td className="text-center">
                   <input
                     type="checkbox"
                     checked={selected.has(d.record_key)}
@@ -306,33 +299,33 @@ export function LibraryTab({ token }: { token: string | undefined }) {
                     aria-label="בחר מסמך"
                   />
                 </td>
-                <td className="max-w-[34rem] p-2">
-                  <button className="block w-full truncate text-right hover:text-sky-600 hover:underline"
+                <td className="max-w-[34rem]">
+                  <button className="block w-full truncate text-right underline-offset-4 hover:underline"
                     title={d.title} onClick={() => setOpenKey(d.record_key)}>
                     {d.title}
                   </button>
-                  {d.error && <p className="truncate text-xs text-red-600" title={d.error}>{d.error}</p>}
+                  {d.error && <p className="mt-0.5 truncate text-xs text-red-600 dark:text-red-400" title={d.error}>{d.error}</p>}
                 </td>
-                <td className="whitespace-nowrap p-2 text-xs text-muted-foreground">{shortDate(d.sort_date)}</td>
-                <td className="p-2"><Pill className={DOC_STATUS[d.status].className}>{DOC_STATUS[d.status].label}</Pill></td>
-                <td className="p-2 tabular-nums">{d.pages ?? "—"}</td>
-                <td className="p-2 tabular-nums">
+                <td className="whitespace-nowrap text-xs text-muted-foreground">{shortDate(d.sort_date)}</td>
+                <td><Pill className={DOC_STATUS[d.status].className}>{DOC_STATUS[d.status].label}</Pill></td>
+                <td className="tabular-nums">{d.pages ?? "—"}</td>
+                <td className="tabular-nums">
                   {d.tables ?? "—"}
                   {!!d.flagged_tables && (
-                    <span className="ms-1 text-xs text-amber-600" title="טבלאות שסומנו לבדיקה">
+                    <span className="ms-1 text-xs text-amber-600 dark:text-amber-400" title="טבלאות שסומנו לבדיקה">
                       ({d.flagged_tables} לבדיקה)
                     </span>
                   )}
                 </td>
-                <td className="p-2 tabular-nums">{d.chunks ?? "—"}</td>
-                <td className="p-2 tabular-nums" title={d.embed_tokens ? `${num(d.embed_tokens)} טוקנים` : undefined}>
+                <td className="tabular-nums">{d.chunks ?? "—"}</td>
+                <td className="tabular-nums" title={d.embed_tokens ? `${num(d.embed_tokens)} טוקנים` : undefined}>
                   {usdPrecise(d.index_cost_usd)}
                 </td>
               </tr>
             ))}
             {result && docs.length === 0 && (
               <tr>
-                <td colSpan={8} className="p-8 text-center text-sm text-muted-foreground">
+                <td colSpan={8} className="py-12 text-center text-sm text-muted-foreground">
                   {result.catalog_total === 0
                     ? "הקטלוג ריק. טען אותו פעם אחת מהמחשב: python scripts/index_worker.py push-catalog"
                     : "אין מסמכים שמתאימים לסינון."}
