@@ -11,7 +11,9 @@ import {
 } from "@/lib/admin-api"
 import { cn } from "@/lib/utils"
 import { DocumentViewer } from "./document-viewer"
-import { DOC_STATUS, DOC_STATUS_ORDER, ErrorNote, num, Pill, relativeTime, shortDate } from "./shared"
+import {
+  DOC_STATUS, DOC_STATUS_ORDER, ErrorNote, IndexCostSummary, num, Pill, relativeTime, shortDate, usdPrecise,
+} from "./shared"
 
 const ACTIONS: { name: LibraryActionName; label: string; from: DocStatus[]; confirm?: string }[] = [
   { name: "queue", label: "הורד ופרסר", from: ["catalog", "failed", "no_text", "parsed"] },
@@ -172,6 +174,10 @@ export function LibraryTab({ token }: { token: string | undefined }) {
       {sync?.error && <ErrorNote message={`עדכון הקטלוג נכשל: ${sync.error}`} />}
       <ErrorNote message={error} />
 
+      {result && result.index_cost.documents > 0 && (
+        <IndexCostSummary cost={result.index_cost} catalogTotal={result.catalog_total} indexed={result.counts.indexed} />
+      )}
+
       {/* status chips */}
       <div className="flex flex-wrap gap-2">
         <button
@@ -282,6 +288,7 @@ export function LibraryTab({ token }: { token: string | undefined }) {
               <th className="p-2 text-right font-medium">עמודים</th>
               <th className="p-2 text-right font-medium">טבלאות</th>
               <th className="p-2 text-right font-medium">קטעים</th>
+              <th className="p-2 text-right font-medium">עלות אינדוקס</th>
             </tr>
           </thead>
           <tbody>
@@ -318,11 +325,14 @@ export function LibraryTab({ token }: { token: string | undefined }) {
                   )}
                 </td>
                 <td className="p-2 tabular-nums">{d.chunks ?? "—"}</td>
+                <td className="p-2 tabular-nums" title={d.embed_tokens ? `${num(d.embed_tokens)} טוקנים` : undefined}>
+                  {usdPrecise(d.index_cost_usd)}
+                </td>
               </tr>
             ))}
             {result && docs.length === 0 && (
               <tr>
-                <td colSpan={7} className="p-8 text-center text-sm text-muted-foreground">
+                <td colSpan={8} className="p-8 text-center text-sm text-muted-foreground">
                   {result.catalog_total === 0
                     ? "הקטלוג ריק. טען אותו פעם אחת מהמחשב: python scripts/index_worker.py push-catalog"
                     : "אין מסמכים שמתאימים לסינון."}

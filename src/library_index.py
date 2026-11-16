@@ -18,8 +18,6 @@ from src.chunker import chunk_documents
 
 logger = logging.getLogger(__name__)
 
-CHARS_PER_TOKEN = 3  # rough Hebrew average, used only to estimate embedding cost
-
 _queue: "queue.Queue[tuple[str, str]]" = queue.Queue()
 _thread: threading.Thread | None = None
 _thread_lock = threading.Lock()
@@ -45,8 +43,14 @@ def remove_from_index(agent_id: str, key: str) -> None:
     get_agent_vector_store(agent_id)._collection.delete(where={"record_key": key})
 
 
-def index_document(agent: dict, key: str) -> int:
-    """Chunk + embed one parsed document. Returns the number of chunks stored."""
+def index_document(agent: dict, key: str) -> dict:
+    """Chunk + embed one parsed document.
+
+    Returns {"chunks", "tokens", "cost_usd", "exact"}: the embedding tokens are
+    counted by Gemini itself (free countTokens call), so the cost is what the
+    embedding call is billed, at the embedding price in the admin settings."""
+    from src.embeddings import count_embedding_tokens
+
     from src.agents import get_agent_vector_store
 
     doc = library_store.get_document(agent["id"], key)
@@ -59,13 +63,13 @@ def index_document(agent: dict, key: str) -> int:
     vs = get_agent_vector_store(agent["id"])
     vs.add_documents(chunks, ids=[f"{key}_{i}" for i in range(len(chunks))])
 
-    tokens = sum(len(c.page_content) for c in chunks) // CHARS_PER_TOKEN
-    price = admin_store.get_settings()["price_embedding_per_m"]
+    tokens, exact = count_embedding_tokens([c.page_content for c in chunks])
+    cost = tokens * admin_store.get_settings()["price_embedding_per_m"] / 1_000_000
     admin_store.record_usage(
         user_sub=None, kind="indexing", model="embedding", input_tokens=tokens, output_tokens=0,
-        agent_id=agent["id"], cost_usd=tokens * price / 1_000_000,
+        agent_id=agent["id"], cost_usd=cost,
     )
-    return len(chunks)
+    return {"chunks": len(chunks), "tokens": tokens, "cost_usd": cost, "exact": exact}
 
 
 def _friendly_error(exc: Exception) -> str:
@@ -85,8 +89,9 @@ def process(agent_id: str, key: str) -> None:
         agent = get_agent(agent_id)
         if agent is None:
             raise ValueError(f"unknown agent {agent_id}")
-        count = index_document(agent, key)
-        library_store.set_status(agent_id, key, "indexed", chunks=count)
+        result = index_document(agent, key)
+        library_store.set_status(agent_id, key, "indexed", chunks=result["chunks"],
+                                 embed_tokens=result["tokens"], index_cost_usd=result["cost_usd"])
     except Exception as exc:
         logger.exception("indexing failed for %s/%s", agent_id, key)
         library_store.set_status(agent_id, key, "parsed", error=_friendly_error(exc))

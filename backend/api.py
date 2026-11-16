@@ -179,12 +179,17 @@ def _enforce_quota(state: dict) -> None:
         )
 
 
+def _new_usage_collector() -> UsageCollector:
+    settings = admin_store.get_settings()
+    return UsageCollector(fallback_prices=(settings["price_input_per_m"], settings["price_output_per_m"]))
+
+
 def _record_chat_usage(user_id: str, usage: UsageCollector, agent_id: str | None, ok: bool) -> None:
     try:
         admin_store.record_usage(
-            user_sub=user_id, kind="chat", model=LLM_MODEL,
+            user_sub=user_id, kind="chat", model=",".join(sorted(usage.models)) or LLM_MODEL,
             input_tokens=usage.input_tokens, output_tokens=usage.output_tokens,
-            llm_calls=usage.llm_calls, agent_id=agent_id, ok=ok,
+            llm_calls=usage.llm_calls, agent_id=agent_id, ok=ok, cost_usd=usage.cost_usd,
         )
     except Exception:
         pass  # usage accounting must never break an answer
@@ -199,7 +204,7 @@ async def chat(
     _enforce_quota(state)
     user_id = state["user"]["sub"]
     session_id = request.session_id or str(uuid.uuid4())
-    usage, ok = UsageCollector(), False
+    usage, ok = _new_usage_collector(), False
     try:
         result = run_rag_pipeline(
             query=request.query,
@@ -245,7 +250,7 @@ def _run_stream_in_thread(
     filters: dict | None = None,
 ):
     """Run the sync stream_rag_pipeline in a thread and push events to a queue."""
-    usage, ok = UsageCollector(), False
+    usage, ok = _new_usage_collector(), False
     try:
         for event in stream_rag_pipeline(
             query=query,

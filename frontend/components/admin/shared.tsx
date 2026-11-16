@@ -53,6 +53,25 @@ export function StatCard({ label, value, hint, tone }: {
   )
 }
 
+/** Indexing cost so far, per document, and what the whole catalog would cost at that rate. */
+export function IndexCostSummary({ cost, catalogTotal, indexed }: {
+  cost: import("@/lib/admin-api").IndexCost
+  catalogTotal: number
+  indexed: number
+}) {
+  return (
+    <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+      <StatCard label="עלות ממוצעת לאינדוקס מסמך" value={usdPrecise(cost.documents ? cost.avg_per_document_usd : null)}
+        hint={cost.documents ? `לפי ${num(cost.documents)} מסמכים שאונדקסו` : "יוצג אחרי המסמך הראשון"} />
+      <StatCard label="עלות האינדוקס עד עכשיו" value={usdPrecise(cost.total_usd)}
+        hint={`${num(cost.tokens)} טוקנים · ${num(indexed)} מסמכים`} />
+      <StatCard label="צפי לאינדוקס כל הקטלוג" value={cost.documents ? usdPrecise(cost.projected_catalog_usd) : "—"}
+        hint={`${num(catalogTotal)} מסמכים, לפי הממוצע`} />
+      <StatCard label="עלות הפרסור" value="$0" hint="רץ במחשב שלך" />
+    </div>
+  )
+}
+
 export function ErrorNote({ message }: { message: string }) {
   if (!message) return null
   return (
@@ -64,6 +83,10 @@ export function ErrorNote({ message }: { message: string }) {
 
 export const usd = (n: number) =>
   n >= 100 ? `$${n.toFixed(0)}` : n >= 1 ? `$${n.toFixed(2)}` : n > 0 ? `$${n.toFixed(3)}` : "$0"
+
+/** Small amounts need more digits: one document costs fractions of a cent. */
+export const usdPrecise = (n: number | null | undefined) =>
+  n == null ? "—" : n >= 1 ? `$${n.toFixed(2)}` : n >= 0.01 ? `$${n.toFixed(3)}` : `$${n.toFixed(4)}`
 
 export const num = (n: number | null | undefined) => (n ?? 0).toLocaleString("he-IL")
 

@@ -25,7 +25,7 @@ from langchain_core.output_parsers import JsonOutputParser
 from langchain_core.messages import HumanMessage, AIMessage
 from pydantic import BaseModel, Field
 
-from config import GOOGLE_API_KEY, LLM_MODEL, LLM_TIMEOUT_SHORT, LLM_MAX_RETRIES
+from src.llm import fast_llm
 from src.prompt_store import load_prompt
 
 logger = logging.getLogger(__name__)
@@ -122,13 +122,7 @@ Return ONLY the JSON object."""
 
 
 def _get_detector_llm() -> ChatGoogleGenerativeAI:
-    return ChatGoogleGenerativeAI(
-        model=LLM_MODEL,
-        google_api_key=GOOGLE_API_KEY,
-        temperature=0,
-        timeout=LLM_TIMEOUT_SHORT,
-        max_retries=LLM_MAX_RETRIES,
-    )
+    return fast_llm()
 
 
 def detect_full_document_need(
