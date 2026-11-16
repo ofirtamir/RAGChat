@@ -3,15 +3,26 @@
 import { cn } from "@/lib/utils"
 import type { DocStatus, UsageDay, UserStatus } from "@/lib/admin-api"
 
+/** Soft colour tones shared by every status pill in the console. */
+export const TONE = {
+  neutral: "bg-muted text-muted-foreground",
+  amber:   "bg-amber-50 text-amber-700 dark:bg-amber-400/10 dark:text-amber-300",
+  sky:     "bg-sky-50 text-sky-700 dark:bg-sky-400/10 dark:text-sky-300",
+  violet:  "bg-violet-50 text-violet-700 dark:bg-violet-400/10 dark:text-violet-300",
+  emerald: "bg-emerald-50 text-emerald-700 dark:bg-emerald-400/10 dark:text-emerald-300",
+  orange:  "bg-orange-50 text-orange-700 dark:bg-orange-400/10 dark:text-orange-300",
+  red:     "bg-red-50 text-red-700 dark:bg-red-400/10 dark:text-red-300",
+} as const
+
 export const DOC_STATUS: Record<DocStatus, { label: string; className: string }> = {
-  catalog:    { label: "בקטלוג",        className: "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300" },
-  queued:     { label: "בתור",          className: "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300" },
-  processing: { label: "בהורדה ופרסור", className: "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300" },
-  parsed:     { label: "פורסר",         className: "bg-sky-100 text-sky-800 dark:bg-sky-950 dark:text-sky-300" },
-  indexing:   { label: "באינדוקס",      className: "bg-violet-100 text-violet-800 dark:bg-violet-950 dark:text-violet-300" },
-  indexed:    { label: "באינדקס",       className: "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300" },
-  no_text:    { label: "סרוק, ללא טקסט", className: "bg-orange-100 text-orange-800 dark:bg-orange-950 dark:text-orange-300" },
-  failed:     { label: "נכשל",          className: "bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-300" },
+  catalog:    { label: "בקטלוג",        className: TONE.neutral },
+  queued:     { label: "בתור",          className: TONE.amber },
+  processing: { label: "בהורדה ופרסור", className: TONE.amber },
+  parsed:     { label: "פורסר",         className: TONE.sky },
+  indexing:   { label: "באינדוקס",      className: TONE.violet },
+  indexed:    { label: "באינדקס",       className: TONE.emerald },
+  no_text:    { label: "סרוק, ללא טקסט", className: TONE.orange },
+  failed:     { label: "נכשל",          className: TONE.red },
 }
 
 export const DOC_STATUS_ORDER: DocStatus[] = [
@@ -19,18 +30,21 @@ export const DOC_STATUS_ORDER: DocStatus[] = [
 ]
 
 export const USER_STATUS: Record<UserStatus, { label: string; className: string }> = {
-  pending:  { label: "ממתין לאישור", className: "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300" },
-  approved: { label: "מאושר",        className: "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300" },
-  blocked:  { label: "חסום",         className: "bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-300" },
+  pending:  { label: "ממתין לאישור", className: TONE.amber },
+  approved: { label: "מאושר",        className: TONE.emerald },
+  blocked:  { label: "חסום",         className: TONE.red },
 }
 
 export function Pill({ className, children }: { className?: string; children: React.ReactNode }) {
   return (
-    <span className={cn("inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium whitespace-nowrap", className)}>
+    <span className={cn("inline-flex items-center gap-1 whitespace-nowrap rounded-full px-2.5 py-0.5 text-xs font-medium", className)}>
       {children}
     </span>
   )
 }
+
+/** Quiet white card used across the console. */
+export const CARD = "rounded-2xl border bg-card"
 
 export function StatCard({ label, value, hint, tone }: {
   label: string
@@ -39,16 +53,16 @@ export function StatCard({ label, value, hint, tone }: {
   tone?: "warn" | "ok"
 }) {
   return (
-    <div className="rounded-xl border bg-card p-4">
-      <p className="text-xs text-muted-foreground">{label}</p>
+    <div className={cn(CARD, "p-5")}>
+      <p className="text-[13px] text-muted-foreground">{label}</p>
       <p className={cn(
-        "mt-1 text-2xl font-semibold tabular-nums",
+        "mt-1.5 text-[26px] font-semibold leading-tight tracking-tight tabular-nums",
         tone === "warn" && "text-amber-600 dark:text-amber-400",
         tone === "ok" && "text-emerald-600 dark:text-emerald-400",
       )}>
         {value}
       </p>
-      {hint && <p className="mt-1 text-xs text-muted-foreground">{hint}</p>}
+      {hint && <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">{hint}</p>}
     </div>
   )
 }
@@ -75,7 +89,7 @@ export function IndexCostSummary({ cost, catalogTotal, indexed }: {
 export function ErrorNote({ message }: { message: string }) {
   if (!message) return null
   return (
-    <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-900 dark:bg-red-950 dark:text-red-300">
+    <p className="rounded-xl border border-red-200 bg-red-50 px-4 py-2.5 text-sm text-red-700 dark:border-red-400/20 dark:bg-red-400/10 dark:text-red-300">
       {message}
     </p>
   )
@@ -121,7 +135,7 @@ export function DailyBars({ days, pick, format, barClassName }: {
 }) {
   const max = Math.max(...days.map(pick), 0)
   return (
-    <div dir="ltr" className="flex h-32 items-end gap-[3px]">
+    <div dir="ltr" className="flex h-36 items-end gap-[3px]">
       {days.map(d => {
         const value = pick(d)
         return (
@@ -131,7 +145,7 @@ export function DailyBars({ days, pick, format, barClassName }: {
             className="flex h-full flex-1 items-end"
           >
             <div
-              className={cn("w-full rounded-t bg-sky-500/80 hover:bg-sky-500", barClassName)}
+              className={cn("w-full rounded-t-[3px] bg-foreground/70 transition-colors hover:bg-foreground", barClassName)}
               style={{ height: max > 0 ? `${Math.max(value > 0 ? 3 : 0, (value / max) * 100)}%` : 0 }}
             />
           </div>

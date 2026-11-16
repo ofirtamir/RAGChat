@@ -4,7 +4,7 @@ import { useEffect, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { AdminSettings, getSettings, saveSettings } from "@/lib/admin-api"
-import { ErrorNote } from "./shared"
+import { CARD, ErrorNote } from "./shared"
 
 type NumericKey = Exclude<keyof AdminSettings, "require_approval">
 
@@ -42,31 +42,31 @@ export function SettingsTab({ token }: { token: string | undefined }) {
   }
 
   return (
-    <div className="max-w-xl space-y-5">
-      <label className="flex items-start gap-3 rounded-xl border bg-card p-4">
+    <div className="max-w-xl space-y-3">
+      <label className={`${CARD} flex cursor-pointer items-start gap-3 p-5`}>
         <input
           type="checkbox"
-          className="mt-1"
+          className="mt-1 h-4 w-4 accent-foreground"
           checked={draft.require_approval}
           onChange={e => { setDraft({ ...draft, require_approval: e.target.checked }); setNotice("") }}
         />
         <span>
           <span className="block text-sm font-medium">משתמשים חדשים דורשים אישור</span>
-          <span className="block text-xs text-muted-foreground">
+          <span className="mt-0.5 block text-xs leading-relaxed text-muted-foreground">
             כשמסומן, מי שנכנס עם גוגל בפעם הראשונה לא יכול לשאול עד שתאשר אותו במסך המשתמשים.
           </span>
         </span>
       </label>
 
       {FIELDS.map(f => (
-        <label key={f.key} className="block rounded-xl border bg-card p-4">
+        <label key={f.key} className={`${CARD} block p-5`}>
           <span className="block text-sm font-medium">{f.label}</span>
-          <span className="block text-xs text-muted-foreground">{f.hint}</span>
+          <span className="mt-0.5 block text-xs leading-relaxed text-muted-foreground">{f.hint}</span>
           <Input
             type="number"
             min={0}
             step={f.step}
-            className="mt-2 h-9 w-40"
+            className="mt-3 w-40"
             value={draft[f.key]}
             onChange={e => { setDraft({ ...draft, [f.key]: Number(e.target.value) || 0 }); setNotice("") }}
           />
@@ -74,9 +74,9 @@ export function SettingsTab({ token }: { token: string | undefined }) {
       ))}
 
       <ErrorNote message={error} />
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-3 pt-2">
         <Button disabled={!dirty} onClick={save}>שמור הגדרות</Button>
-        {notice && <span className="text-sm text-emerald-600">{notice}</span>}
+        {notice && <span className="text-sm text-emerald-600 dark:text-emerald-400">{notice}</span>}
       </div>
     </div>
   )

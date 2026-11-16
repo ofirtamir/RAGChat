@@ -8,7 +8,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Button } from "@/components/ui/button"
 import { getLibraryDoc, LibraryActionName, LibraryDocDetail } from "@/lib/admin-api"
 import { cn } from "@/lib/utils"
-import { DOC_STATUS, ErrorNote, num, Pill, shortDate, usdPrecise } from "./shared"
+import { DOC_STATUS, ErrorNote, num, Pill, shortDate, TONE, usdPrecise } from "./shared"
 
 /** Shows what the parser produced for one document, page by page, next to its details. */
 export function DocumentViewer({ agentId, recordKey, token, onClose, onAction }: {
@@ -53,9 +53,9 @@ export function DocumentViewer({ agentId, recordKey, token, onClose, onAction }:
 
   return (
     <Dialog open={!!recordKey} onOpenChange={open => !open && onClose()}>
-      <DialogContent dir="rtl" className="flex h-[92vh] max-w-5xl flex-col gap-3 text-right">
-        <DialogHeader className="space-y-2 pe-6 text-right sm:text-right">
-          <DialogTitle className="text-base leading-snug">{doc?.title ?? "טוען…"}</DialogTitle>
+      <DialogContent dir="rtl" className="flex h-[92vh] max-w-5xl flex-col gap-4 text-right">
+        <DialogHeader className="space-y-2 pe-8 text-right sm:text-right">
+          <DialogTitle className="text-lg font-semibold leading-snug">{doc?.title ?? "טוען…"}</DialogTitle>
           <DialogDescription asChild>
             <div className="flex flex-wrap items-center gap-2 text-xs">
               {doc && (
@@ -64,7 +64,7 @@ export function DocumentViewer({ agentId, recordKey, token, onClose, onAction }:
                   {doc.pages != null && <span>{num(doc.pages)} עמודים</span>}
                   {doc.tables != null && <span>· {num(doc.tables)} טבלאות</span>}
                   {!!doc.flagged_tables && (
-                    <span className="text-amber-600">· {num(doc.flagged_tables)} מסומנות לבדיקה</span>
+                    <span className="text-amber-600 dark:text-amber-400">· {num(doc.flagged_tables)} מסומנות לבדיקה</span>
                   )}
                   {doc.chars != null && <span>· {num(doc.chars)} תווים</span>}
                   {doc.chunks != null && <span>· {num(doc.chunks)} קטעים באינדקס</span>}
@@ -88,7 +88,7 @@ export function DocumentViewer({ agentId, recordKey, token, onClose, onAction }:
                 href={f.url}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="inline-flex items-center gap-1 rounded-md border px-2.5 py-1.5 text-xs hover:bg-accent"
+                className="inline-flex h-8 items-center gap-1.5 rounded-full border px-3 text-[13px] transition-colors hover:bg-accent"
               >
                 <ExternalLink className="h-3.5 w-3.5" />
                 קובץ המקור{doc.files.length > 1 ? ` ${i + 1}` : ""}
@@ -123,7 +123,7 @@ export function DocumentViewer({ agentId, recordKey, token, onClose, onAction }:
           </div>
         )}
 
-        <div className="min-h-0 flex-1 space-y-3 overflow-y-auto rounded-lg border bg-muted/30 p-3">
+        <div className="scrollbar-thin min-h-0 flex-1 space-y-3 overflow-y-auto rounded-2xl bg-muted/50 p-3 sm:p-4">
           {doc && pages.length === 0 && (
             <p className="py-10 text-center text-sm text-muted-foreground">
               {doc.parsed_pages.length === 0
@@ -136,12 +136,12 @@ export function DocumentViewer({ agentId, recordKey, token, onClose, onAction }:
             return (
               <section
                 key={page.number}
-                className={cn("rounded-lg border bg-background p-4", problems && "border-amber-400")}
+                className={cn("rounded-xl border bg-background p-4 sm:p-5", problems && "border-amber-400 dark:border-amber-400/50")}
               >
                 <div className="mb-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                   <span className="font-medium">עמוד {page.number + 1}</span>
                   {problems && (
-                    <Pill className="bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300">
+                    <Pill className={TONE.amber}>
                       טבלה לבדיקה: <span dir="ltr" className="ms-1">{problems.join(", ")}</span>
                     </Pill>
                   )}

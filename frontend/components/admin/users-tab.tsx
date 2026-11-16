@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { AdminSettings, AdminUser, getUsers, patchUser, UserStatus } from "@/lib/admin-api"
 import { cn } from "@/lib/utils"
-import { ErrorNote, num, Pill, relativeTime, shortDate, usd, USER_STATUS } from "./shared"
+import { CARD, ErrorNote, num, Pill, relativeTime, shortDate, usd, USER_STATUS } from "./shared"
 
 const ORDER: Record<UserStatus, number> = { pending: 0, approved: 1, blocked: 2 }
 
@@ -48,18 +48,16 @@ export function UsersTab({ token }: { token: string | undefined }) {
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-2">
-        <button onClick={() => setFilter(null)}
-          className={cn("rounded-full border px-3 py-1 text-xs", !filter && "border-sky-500 bg-sky-50 dark:bg-sky-950")}>
+        <button onClick={() => setFilter(null)} className="chip" data-active={!filter}>
           הכל: {num(users.length)}
         </button>
         {(Object.keys(USER_STATUS) as UserStatus[]).map(s => (
-          <button key={s} onClick={() => setFilter(filter === s ? null : s)}
-            className={cn("rounded-full border px-3 py-1 text-xs", filter === s && "border-sky-500 bg-sky-50 dark:bg-sky-950")}>
+          <button key={s} onClick={() => setFilter(filter === s ? null : s)} className="chip" data-active={filter === s}>
             {USER_STATUS[s].label}: {num(counts[s])}
           </button>
         ))}
         <span className="flex-1" />
-        <Input className="h-9 w-56" placeholder="חיפוש לפי שם או אימייל" value={q} onChange={e => setQ(e.target.value)} />
+        <Input className="w-full sm:w-64" placeholder="חיפוש לפי שם או אימייל" value={q} onChange={e => setQ(e.target.value)} />
       </div>
 
       {settings && (
@@ -72,41 +70,41 @@ export function UsersTab({ token }: { token: string | undefined }) {
       )}
       <ErrorNote message={error} />
 
-      <div className="overflow-x-auto rounded-xl border bg-card">
-        <table className="w-full text-sm">
-          <thead className="border-b bg-muted/40 text-xs text-muted-foreground">
+      <div className={cn(CARD, "overflow-x-auto")}>
+        <table className="data-table">
+          <thead>
             <tr>
-              <th className="p-2 text-right font-medium">משתמש</th>
-              <th className="p-2 text-right font-medium">מצב</th>
-              <th className="p-2 text-right font-medium">שאלות היום</th>
-              <th className="p-2 text-right font-medium">מכסה יומית</th>
-              <th className="p-2 text-right font-medium">שאלות החודש</th>
-              <th className="p-2 text-right font-medium">עלות החודש</th>
-              <th className="p-2 text-right font-medium">נראה לאחרונה</th>
-              <th className="p-2 text-right font-medium">פעולות</th>
+              <th>משתמש</th>
+              <th>מצב</th>
+              <th>שאלות היום</th>
+              <th>מכסה יומית</th>
+              <th>שאלות החודש</th>
+              <th>עלות החודש</th>
+              <th>נראה לאחרונה</th>
+              <th>פעולות</th>
             </tr>
           </thead>
           <tbody>
             {visible.map(u => (
-              <tr key={u.sub} className="border-b last:border-0">
-                <td className="p-2">
+              <tr key={u.sub}>
+                <td>
                   <p className="font-medium">{u.name || "—"}</p>
-                  <p dir="ltr" className="text-right text-xs text-muted-foreground">{u.email}</p>
+                  <p dir="ltr" className="mt-0.5 text-right text-xs text-muted-foreground">{u.email}</p>
                   <p className="text-[11px] text-muted-foreground">הצטרף {shortDate(u.created_at)}</p>
                 </td>
-                <td className="p-2"><Pill className={USER_STATUS[u.status].className}>{USER_STATUS[u.status].label}</Pill></td>
-                <td className="p-2 tabular-nums">{num(u.questions_today)}</td>
-                <td className="p-2">
+                <td><Pill className={USER_STATUS[u.status].className}>{USER_STATUS[u.status].label}</Pill></td>
+                <td className="tabular-nums">{num(u.questions_today)}</td>
+                <td>
                   <LimitEditor
                     value={u.daily_limit}
                     fallback={settings?.default_daily_limit ?? 0}
                     onSave={v => update(u.sub, v === null ? { clear_daily_limit: true } : { daily_limit: v })}
                   />
                 </td>
-                <td className="p-2 tabular-nums">{num(u.questions_month)}</td>
-                <td className="p-2 tabular-nums">{usd(u.cost_month)}</td>
-                <td className="whitespace-nowrap p-2 text-xs text-muted-foreground">{relativeTime(u.last_seen_at)}</td>
-                <td className="p-2">
+                <td className="tabular-nums">{num(u.questions_month)}</td>
+                <td className="tabular-nums">{usd(u.cost_month)}</td>
+                <td className="whitespace-nowrap text-xs text-muted-foreground">{relativeTime(u.last_seen_at)}</td>
+                <td>
                   <div className="flex gap-1">
                     {u.status !== "approved" && (
                       <Button size="sm" onClick={() => update(u.sub, { status: "approved" })}>אשר</Button>
@@ -119,7 +117,7 @@ export function UsersTab({ token }: { token: string | undefined }) {
               </tr>
             ))}
             {visible.length === 0 && (
-              <tr><td colSpan={8} className="p-8 text-center text-sm text-muted-foreground">אין משתמשים להצגה.</td></tr>
+              <tr><td colSpan={8} className="py-12 text-center text-sm text-muted-foreground">אין משתמשים להצגה.</td></tr>
             )}
           </tbody>
         </table>

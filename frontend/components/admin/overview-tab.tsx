@@ -2,9 +2,10 @@
 
 import { useCallback, useEffect, useState } from "react"
 import { getOverview, Overview } from "@/lib/admin-api"
+import { cn } from "@/lib/utils"
 import {
-  DailyBars, DOC_STATUS, DOC_STATUS_ORDER, ErrorNote, IndexCostSummary, monthProjection, num, Pill,
-  relativeTime, StatCard, usd,
+  CARD, DailyBars, DOC_STATUS, DOC_STATUS_ORDER, ErrorNote, IndexCostSummary, monthProjection, num,
+  Pill, relativeTime, StatCard, TONE, usd,
 } from "./shared"
 
 export function OverviewTab({ token, onNavigate }: {
@@ -33,7 +34,7 @@ export function OverviewTab({ token, onNavigate }: {
   const overBudget = budget > 0 && projection > budget
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <StatCard
           label="שאלות היום"
@@ -62,35 +63,35 @@ export function OverviewTab({ token, onNavigate }: {
       <div className="grid gap-3 lg:grid-cols-2">
         <button
           onClick={() => onNavigate("users")}
-          className="flex flex-col items-start rounded-xl border bg-card p-4 text-right transition-colors hover:bg-accent"
+          className={cn(CARD, "flex flex-col items-start p-5 text-right transition-colors hover:bg-muted/40")}
         >
-          <p className="text-xs text-muted-foreground">משתמשים</p>
-          <p className="mt-1 text-2xl font-semibold tabular-nums">{num(users.total)}</p>
-          <div className="mt-2 flex flex-wrap gap-2">
+          <p className="text-[13px] text-muted-foreground">משתמשים</p>
+          <p className="mt-1.5 text-[26px] font-semibold leading-tight tracking-tight tabular-nums">{num(users.total)}</p>
+          <div className="mt-3 flex flex-wrap gap-1.5">
             {users.pending > 0 && (
-              <Pill className="bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300">
+              <Pill className={TONE.amber}>
                 {users.pending} ממתינים לאישור
               </Pill>
             )}
-            <Pill className="bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300">
+            <Pill className={TONE.emerald}>
               {users.approved} מאושרים
             </Pill>
             {users.blocked > 0 && (
-              <Pill className="bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-300">
+              <Pill className={TONE.red}>
                 {users.blocked} חסומים
               </Pill>
             )}
           </div>
         </button>
 
-        <div className="rounded-xl border bg-card p-4">
+        <div className={cn(CARD, "p-5")}>
           <div className="flex items-center justify-between">
-            <p className="text-xs text-muted-foreground">שאלות ב-14 הימים האחרונים</p>
-            <button onClick={() => onNavigate("usage")} className="text-xs text-sky-600 hover:underline">
+            <p className="text-[13px] text-muted-foreground">שאלות ב-14 הימים האחרונים</p>
+            <button onClick={() => onNavigate("usage")} className="rounded-full px-2 py-0.5 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground">
               לפירוט
             </button>
           </div>
-          <div className="mt-3">
+          <div className="mt-4">
             <DailyBars days={usage.daily} pick={d => d.questions} format={n => `${n} שאלות`} />
           </div>
         </div>
@@ -105,21 +106,19 @@ export function OverviewTab({ token, onNavigate }: {
         <button
           key={lib.agent_id}
           onClick={() => onNavigate("library")}
-          className="block w-full rounded-xl border bg-card p-4 text-right transition-colors hover:bg-accent"
+          className={cn(CARD, "block w-full p-5 text-right transition-colors hover:bg-muted/40")}
         >
           <div className="flex flex-wrap items-center justify-between gap-2">
             <p className="font-medium">{lib.name}</p>
-            <Pill className={worker.online
-              ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300"
-              : "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300"}>
+            <Pill className={worker.online ? TONE.emerald : TONE.neutral}>
               סוכן האינדוקס {worker.online ? "מחובר" : `לא מחובר (נראה ${relativeTime(worker.last_seen)})`}
             </Pill>
           </div>
-          <p className="mt-1 text-xs text-muted-foreground">
+          <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">
             {num(lib.catalog_total)} מסמכים בקטלוג · {num(lib.counts.indexed)} באינדקס
             ({num(lib.indexed_chunks)} קטעים) · {num(lib.flagged_tables)} טבלאות מסומנות לבדיקה
           </p>
-          <div className="mt-3 flex flex-wrap gap-2">
+          <div className="mt-4 flex flex-wrap gap-1.5">
             {DOC_STATUS_ORDER.filter(s => lib.counts[s] > 0).map(s => (
               <Pill key={s} className={DOC_STATUS[s].className}>
                 {DOC_STATUS[s].label}: {num(lib.counts[s])}
