@@ -1,28 +1,24 @@
 "use client"
 
-import { useEffect, useRef, useState } from "react"
-import { AgentInfo, AgentFilters, startAgentIngest, getIngestStatus, IngestStatus } from "@/lib/api"
-import { useMe } from "@/lib/use-me"
+import { useState } from "react"
+import { AgentInfo, AgentFilters } from "@/lib/api"
 import { Input } from "@/components/ui/input"
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
-import { Check, ChevronDown, DownloadCloud, Library, Loader2, SlidersHorizontal, X } from "lucide-react"
+import { Check, ChevronDown, Library, SlidersHorizontal, X } from "lucide-react"
 import { cn } from "@/lib/utils"
 
 interface AgentPanelProps {
   agents: AgentInfo[]
   selectedAgentId: string | null
-  onSelectAgent: (id: string | null) => void
+  onSelectAgent: (id: string) => void
   filters: AgentFilters
   onFiltersChange: (filters: AgentFilters) => void
-  authToken?: string
-  onAgentsChanged?: () => void
   /** The text field, rendered inside the pill. */
   children: React.ReactNode
   /** The send button, rendered at the pill's end. */
@@ -49,47 +45,15 @@ export function AgentPanel({
   onSelectAgent,
   filters,
   onFiltersChange,
-  authToken,
-  onAgentsChanged,
   children,
   action,
 }: AgentPanelProps) {
-  const me = useMe()
   const [showFilters, setShowFilters] = useState(false)
-  const [ingest, setIngest] = useState<IngestStatus | null>(null)
-  const [ingestError, setIngestError] = useState("")
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const agent = agents.find(a => a.id === selectedAgentId) ?? null
   const activeCount = countActiveFilters(filters)
   const hasFilters = Boolean(agent && agent.filters.length > 0)
 
-  // Poll ingest status while a job runs
-  useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current) }, [])
-
-  const handleIngest = async () => {
-    if (!agent || !authToken) return
-    setIngestError("")
-    try {
-      await startAgentIngest(agent.id, 100, authToken)
-    } catch (e) {
-      setIngestError(e instanceof Error ? e.message : "שגיאה")
-      return
-    }
-    setIngest({ running: true, agent_id: agent.id, total: 0, done: 0, ingested: 0, skipped: 0, failed: 0, error: null })
-    pollRef.current = setInterval(async () => {
-      try {
-        const s = await getIngestStatus(authToken)
-        setIngest(s)
-        if (!s.running) {
-          if (pollRef.current) clearInterval(pollRef.current)
-          pollRef.current = null
-          onAgentsChanged?.()
-        }
-      } catch {}
-    }, 2500)
-  }
-
-  const selectAgent = (id: string | null) => {
+  const selectAgent = (id: string) => {
     onSelectAgent(id)
     onFiltersChange({})
     setShowFilters(false)
@@ -193,22 +157,15 @@ export function AgentPanel({
                   agent ? "text-foreground" : "text-muted-foreground",
                 )}
                 aria-label="בחירת מאגר מסמכים"
-                title={agent ? agent.name : "המסמכים שהעליתי"}
+                title={agent?.name}
               >
                 <Library className="h-[18px] w-[18px] shrink-0" />
-                <span className="hidden max-w-[11rem] truncate sm:inline">{agent ? agent.name : "המסמכים שלי"}</span>
+                <span className="hidden max-w-[11rem] truncate sm:inline">{agent?.name ?? "בחירת מאגר"}</span>
                 <ChevronDown className="hidden h-3.5 w-3.5 shrink-0 opacity-60 sm:block" />
               </button>
             </DropdownMenuTrigger>
             <DropdownMenuContent side="top" align="start" className="w-72 text-right">
               <DropdownMenuLabel>חיפוש במאגר</DropdownMenuLabel>
-              <DropdownMenuItem className="cursor-pointer" onSelect={() => selectAgent(null)}>
-                <span className="min-w-0 flex-1">
-                  <span className="block">המסמכים שלי</span>
-                  <span className="block text-xs text-muted-foreground">הקבצים שהעלית (ללא סוכן)</span>
-                </span>
-                {!agent && <Check />}
-              </DropdownMenuItem>
               {agents.map(a => (
                 <DropdownMenuItem key={a.id} className="cursor-pointer" onSelect={() => selectAgent(a.id)}>
                   <span className="min-w-0 flex-1">
@@ -218,20 +175,6 @@ export function AgentPanel({
                   {a.id === selectedAgentId && <Check />}
                 </DropdownMenuItem>
               ))}
-              {agent && me?.is_admin && (
-                <>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem
-                    className="cursor-pointer"
-                    disabled={Boolean(ingest?.running)}
-                    onSelect={handleIngest}
-                    title="משיכת 100 המסמכים האחרונים מהאתר אל מאגר הסוכן"
-                  >
-                    {ingest?.running ? <Loader2 className="animate-spin" /> : <DownloadCloud />}
-                    עדכון מאגר מהאתר
-                  </DropdownMenuItem>
-                </>
-              )}
             </DropdownMenuContent>
           </DropdownMenu>
         )}
@@ -266,27 +209,6 @@ export function AgentPanel({
       {agent && (
         <p className="mt-1.5 truncate px-4 text-xs text-muted-foreground sm:hidden">
           מחפש ב{agent.name}{activeCount > 0 && ` · ${activeCount} פילטרים`}
-        </p>
-      )}
-
-      {/* Ingest progress / result */}
-      {agent && (ingest || ingestError) && (
-        <p className="mt-1.5 px-4 text-xs text-muted-foreground" dir="rtl">
-          {ingestError ? (
-            <span className="text-destructive">שגיאה: {ingestError}</span>
-          ) : ingest?.running ? (
-            <span>
-              מושך מסמכים מהאתר... {ingest.done}/{ingest.total || "?"}
-              {ingest.ingested > 0 && ` · נוספו ${ingest.ingested}`}
-              {ingest.skipped > 0 && ` · דולגו ${ingest.skipped} (קיימים/סרוקים)`}
-            </span>
-          ) : ingest ? (
-            <span className="text-emerald-600 dark:text-emerald-400">
-              ✓ העדכון הסתיים — נוספו {ingest.ingested}, דולגו {ingest.skipped}
-              {ingest.failed > 0 && `, נכשלו ${ingest.failed}`}
-              {ingest.error && ` · שגיאה: ${ingest.error}`}
-            </span>
-          ) : null}
         </p>
       )}
     </div>

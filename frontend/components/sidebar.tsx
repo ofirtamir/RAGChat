@@ -1,11 +1,9 @@
 "use client"
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react"
-import { DocumentsDialog } from "@/components/documents-dialog"
 import { UserMenu } from "@/components/user-menu"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
-import { DocumentInfo } from "@/types/chat"
-import { BookOpen, PanelRightClose, SquarePen, Trash2 } from "lucide-react"
+import { PanelRightClose, SquarePen, Trash2 } from "lucide-react"
 import { cn } from "@/lib/utils"
 
 // useLayoutEffect logs a warning on the server. Use useEffect on SSR.
@@ -106,12 +104,6 @@ interface SidebarProps {
   onNewChat: () => void
   onSelectSession: (id: string) => void
   onDeleteSession?: (id: string) => void
-  documents: DocumentInfo[]
-  totalChunks: number
-  onUpload: (files: File[]) => void
-  onClearDocuments: () => void
-  isUploading: boolean
-  uploadError?: string
   /** Desktop: whether the sidebar is expanded. */
   open: boolean
   /** Phone: whether the sidebar drawer is showing. */
@@ -119,11 +111,10 @@ interface SidebarProps {
   onClose: () => void
 }
 
-/** One row in the sidebar's top navigation ("new chat", "documents"). */
-function NavRow({ icon: Icon, label, hint, onClick }: {
+/** One row in the sidebar's top navigation. */
+function NavRow({ icon: Icon, label, onClick }: {
   icon: React.ComponentType<{ className?: string }>
   label: string
-  hint?: React.ReactNode
   onClick: () => void
 }) {
   return (
@@ -133,18 +124,14 @@ function NavRow({ icon: Icon, label, hint, onClick }: {
     >
       <Icon className="h-[18px] w-[18px] shrink-0" />
       <span className="flex-1 truncate text-right">{label}</span>
-      {hint !== undefined && <span className="shrink-0 text-xs text-muted-foreground">{hint}</span>}
     </button>
   )
 }
 
 export function Sidebar({
   sessions, activeSessionId, onNewChat, onSelectSession, onDeleteSession,
-  documents, totalChunks, onUpload, onClearDocuments, isUploading, uploadError,
   open, mobileOpen, onClose,
 }: SidebarProps) {
-  const [docsOpen, setDocsOpen] = useState(false)
-
   // On a phone the sidebar is a drawer: picking something closes it.
   const closeOnPhone = () => {
     if (window.matchMedia("(max-width: 767px)").matches) onClose()
@@ -191,15 +178,6 @@ export function Sidebar({
           {/* Navigation */}
           <nav className="space-y-0.5 px-2">
             <NavRow icon={SquarePen} label="שיחה חדשה" onClick={() => { onNewChat(); closeOnPhone() }} />
-            <NavRow
-              icon={BookOpen}
-              label={isUploading ? "מעלה מסמכים…" : "מסמכי שמאות"}
-              hint={documents.length > 0 ? `${documents.length} קבצים · ${totalChunks} קטעים` : undefined}
-              onClick={() => setDocsOpen(true)}
-            />
-            {uploadError && (
-              <p className="px-2.5 pt-1 text-xs leading-snug text-destructive">{uploadError}</p>
-            )}
           </nav>
 
           {/* Chat history */}
@@ -257,18 +235,6 @@ export function Sidebar({
           </div>
         </div>
       </aside>
-
-      {/* Documents dialog — rendered outside the aside to avoid stacking-context issues */}
-      <DocumentsDialog
-        open={docsOpen}
-        onOpenChange={setDocsOpen}
-        documents={documents}
-        totalChunks={totalChunks}
-        onUpload={onUpload}
-        onClearDocuments={onClearDocuments}
-        isUploading={isUploading}
-        uploadError={uploadError}
-      />
     </>
   )
 }

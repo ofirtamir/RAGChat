@@ -51,12 +51,6 @@ export interface ChatSession {
   createdAt: Date
 }
 
-export interface DocumentInfo {
-  source: string
-  chunks: number
-  chars: number
-}
-
 export interface ThinkingStep {
   node: string
   label: string
