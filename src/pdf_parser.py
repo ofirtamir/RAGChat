@@ -40,10 +40,49 @@ class ParsedTable:
 
 
 @dataclass
+class ParsedImage:
+    """An embedded picture that may hold text the text layer doesn't have (a pasted table)."""
+    index: int                                # position in the document, used in the marker
+    page: int                                 # 0-based
+    bbox: tuple[float, float, float, float]
+    digest: str                               # md5 of the image bytes (cache key)
+
+    @property
+    def marker(self) -> str:
+        return IMAGE_MARKER.format(self.index)
+
+
+@dataclass
 class ParsedPage:
     number: int  # 0-based
     markdown: str
     tables: list[ParsedTable] = field(default_factory=list)
+    images: list[ParsedImage] = field(default_factory=list)
+
+
+IMAGE_MARKER = "<<image:{}>>"
+IMAGE_MARKER_RE = re.compile(r"<<image:\d+>>")
+MIN_IMAGE_PT = (100, 30)     # smaller pictures are icons, stamps, signatures
+MIN_IMAGE_AREA = 0.02        # share of the page
+MAX_WORDS_OVER_IMAGE = 4     # text drawn over a picture means it is a background, not content
+
+
+# ---------- text fixes ----------
+
+_CP1255_AS_LATIN = re.compile(r"[à-ú]")
+
+
+def _fix_hebrew(text: str) -> str:
+    """Some old Hebrew fonts map letters to their Windows-1255 byte, which comes out as a
+    Latin-1 character (0xF0 'ð' instead of 'נ'). Windows-1255 0xE0-0xFA is א-ת in Unicode
+    order, so the fix is a shift — applied only to words with no Latin letters."""
+    if not _CP1255_AS_LATIN.search(text) or re.search(r"[A-Za-z]", text):
+        return text
+    return _CP1255_AS_LATIN.sub(lambda m: chr(ord(m.group()) - 0xE0 + 0x5D0), text)
+
+
+def _page_words(page):
+    return [(*w[:4], _fix_hebrew(w[4])) for w in page.get_text("words")]
 
 
 # ---------- lines from word boxes ----------
@@ -278,7 +317,7 @@ def _furniture(doc) -> set[str]:
     for page in doc:
         h = page.rect.height
         seen = set()
-        for ln in _group_lines([w[:5] for w in page.get_text("words")]):
+        for ln in _group_lines(_page_words(page)):
             if ln["yc"] < 0.18 * h or ln["yc"] > 0.82 * h:
                 key = _norm(_line_text(ln["w"]))
                 if key:
@@ -293,9 +332,44 @@ def _is_noise_line(text: str, yc: float, page_height: float) -> bool:
     return yc > 0.82 * page_height and re.fullmatch(r"[\d\s_\-−–]*", text) is not None
 
 
-def _parse_page(page, furniture) -> ParsedPage:
-    words = [w[:5] for w in page.get_text("words")]
+def _image_digests(doc) -> Counter:
+    """How many pages each picture appears on (a letterhead logo repeats on every page)."""
+    seen = Counter()
+    for page in doc:
+        seen.update({_digest(i) for i in page.get_image_info(hashes=True)})
+    return seen
+
+
+def _digest(info) -> str:
+    d = info.get("digest", b"")
+    return d.hex() if isinstance(d, bytes) else str(d)
+
+
+def _content_images(page, words, repeated: Counter, start: int) -> list[ParsedImage]:
+    """Pictures big enough to hold a table or a paragraph, shown once in the document,
+    with no text layer drawn over them."""
+    found, area = [], page.rect.width * page.rect.height
+    for info in page.get_image_info(hashes=True):
+        rect = pymupdf.Rect(info["bbox"]) & page.rect
+        digest = _digest(info)
+        if rect.is_empty or rect.width < MIN_IMAGE_PT[0] or rect.height < MIN_IMAGE_PT[1]:
+            continue
+        if rect.width * rect.height < MIN_IMAGE_AREA * area or repeated[digest] > 1:
+            continue
+        if sum(1 for w in words if _inside(w, rect)) > MAX_WORDS_OVER_IMAGE:
+            continue
+        if any(i.digest == digest for i in found):
+            continue
+        found.append(ParsedImage(index=start + len(found), page=page.number, bbox=tuple(rect), digest=digest))
+    return found
+
+
+def _parse_page(page, furniture, repeated: Counter | None = None, image_start: int = 0) -> ParsedPage:
+    words = _page_words(page)
     blocks, tables = [], []
+    images = _content_images(page, words, repeated, image_start) if repeated is not None else []
+    for img in images:
+        blocks.append((img.bbox[1], img.marker))
     table_rects = []
     for t in page.find_tables().tables:
         if t.row_count < 2 or t.col_count < 2:
@@ -324,15 +398,31 @@ def _parse_page(page, furniture) -> ParsedPage:
         blocks.append((para[0][0]["yc"], " ".join(t for _, t in para)))
 
     blocks.sort(key=lambda b: b[0])
-    return ParsedPage(number=page.number, markdown="\n\n".join(b[1] for b in blocks), tables=tables)
+    return ParsedPage(number=page.number, markdown="\n\n".join(b[1] for b in blocks),
+                      tables=tables, images=images)
 
 
-def parse_pdf(source: str | Path | bytes) -> list[ParsedPage]:
-    """Parse every page of a PDF (path or raw bytes) into Markdown."""
+def parse_pdf(source: str | Path | bytes, image_markers: bool = False) -> list[ParsedPage]:
+    """Parse every page of a PDF (path or raw bytes) into Markdown.
+
+    With image_markers, pictures that may hold content (a table pasted as an image)
+    are listed in `ParsedPage.images` and stand in the Markdown as a marker line at
+    their position; the caller must replace or strip every marker
+    (`strip_image_markers`)."""
     doc = pymupdf.open(stream=source, filetype="pdf") if isinstance(source, bytes) else pymupdf.open(source)
     with doc:
         furniture = _furniture(doc)
-        return [_parse_page(page, furniture) for page in doc]
+        repeated = _image_digests(doc) if image_markers else None
+        pages, count = [], 0
+        for page in doc:
+            parsed = _parse_page(page, furniture, repeated, count)
+            count += len(parsed.images)
+            pages.append(parsed)
+        return pages
+
+
+def strip_image_markers(markdown: str) -> str:
+    return re.sub(r"\n{3,}", "\n\n", IMAGE_MARKER_RE.sub("", markdown)).strip()
 
 
 def pdf_to_markdown(source: str | Path | bytes) -> str:
