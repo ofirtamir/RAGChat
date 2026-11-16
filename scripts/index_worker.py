@@ -69,6 +69,17 @@ def pdf_dir(agent_id: str) -> Path:
     return d
 
 
+def download_with_retry(client: GovilClient, url: str, attempts: int = 3) -> bytes:
+    """gov.il's file server drops a request now and then; try again before failing the document."""
+    for attempt in range(1, attempts + 1):
+        try:
+            return client.download(url)
+        except Exception:
+            if attempt == attempts:
+                raise
+            time.sleep(5 * attempt)
+
+
 def repair_hard_tables(path: Path, parsed_pages, budget: int) -> dict:
     """Re-read the tables the local parser could not read, with a cheap Gemini model.
     Mutates the pages' Markdown in place. Returns {"fixed", "tried", "cost_usd", "fixed_ids"}."""
@@ -113,7 +124,7 @@ def process(doc: dict, client: GovilClient, out_dir: Path, llm_tables: bool = Tr
     for i, f in enumerate(pdfs):
         path = out_dir / (f"{doc['record_key']}.pdf" if i == 0 else f"{doc['record_key']}_{i}.pdf")
         if not path.exists() or path.stat().st_size == 0:
-            path.write_bytes(client.download(f["url"]))
+            path.write_bytes(download_with_retry(client, f["url"]))
         parsed = parse_pdf(path)
         repaired = repair_hard_tables(path, parsed, budget)
         budget -= repaired["tried"]
