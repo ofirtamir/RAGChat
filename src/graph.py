@@ -83,13 +83,18 @@ def _extract_sources(docs: list[Document]) -> list[str]:
     return list({doc.metadata.get("source", "unknown") for doc in docs})
 
 
-def _extract_citations(docs: list[Document], snippet_len: int = 150) -> list[dict]:
-    """Return ordered citation details matching [1], [2], … numbering in _format_docs."""
+def _extract_citations(docs: list[Document], agent_id: str | None = None,
+                       snippet_len: int = 700) -> list[dict]:
+    """Return ordered citation details matching [1], [2], … numbering in _format_docs.
+    Library chunks also carry where they came from, so the UI can open the document."""
     citations = []
     for doc in docs:
-        source = doc.metadata.get("source", "unknown")
-        snippet = doc.page_content[:snippet_len].strip()
-        citations.append({"source": source, "snippet": snippet})
+        meta = doc.metadata
+        citation = {"source": meta.get("source", "unknown"),
+                    "snippet": doc.page_content[:snippet_len].strip()}
+        if agent_id and meta.get("record_key"):
+            citation.update(agent_id=agent_id, record_key=meta["record_key"], page=meta.get("page"))
+        citations.append(citation)
     return citations
 
 
@@ -595,7 +600,7 @@ def _build_result(result: dict, query: str) -> dict:
         "answer": result["answer"],
         "plan": result.get("plan") or create_fallback_plan(query),
         "sources": result.get("sources", []),
-        "citations": _extract_citations(result.get("documents", [])),
+        "citations": _extract_citations(result.get("documents", []), result.get("agent_id")),
         "route": result.get("route"),
         "rewritten": result.get("rewritten"),
         "full_doc_decision": result.get("full_doc_decision"),
