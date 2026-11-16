@@ -201,6 +201,8 @@ class ParseResult(BaseModel):
     pages: list[dict] = []        # [{number, markdown}]
     tables: int = 0
     problems: list[dict] = []     # [{page, problems: [...]}] for tables that failed validation
+    llm_tables: int = Field(default=0, ge=0)          # tables re-read by Gemini on the indexing machine
+    parse_cost_usd: float = Field(default=0.0, ge=0)  # what those re-reads cost
     error: str | None = None
 
 
@@ -234,7 +236,12 @@ def worker_result(result: ParseResult):
                                  error="אין שכבת טקסט בקובץ (כנראה סריקה)")
         return {"status": "no_text"}
     library_store.save_parsed(result.agent_id, result.record_key, result.pages,
-                              result.tables, result.problems)
+                              result.tables, result.problems, llm_tables=result.llm_tables,
+                              parse_cost_usd=result.parse_cost_usd)
+    if result.parse_cost_usd:
+        admin_store.record_usage(user_sub=None, kind="parsing", model="table-fallback",
+                                 input_tokens=0, output_tokens=0, agent_id=result.agent_id,
+                                 cost_usd=result.parse_cost_usd)
     if doc["auto_index"]:
         library_store.set_status(result.agent_id, result.record_key, "indexing")
         library_index.enqueue(result.agent_id, [result.record_key])

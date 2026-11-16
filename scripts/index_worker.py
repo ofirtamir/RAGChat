@@ -69,11 +69,44 @@ def pdf_dir(agent_id: str) -> Path:
     return d
 
 
-def process(doc: dict, client: GovilClient, out_dir: Path) -> dict:
-    """Download every PDF of one record and parse it. Returns the /result payload."""
+def repair_hard_tables(path: Path, parsed_pages, budget: int) -> dict:
+    """Re-read the tables the local parser could not read, with a cheap Gemini model.
+    Mutates the pages' Markdown in place. Returns {"fixed", "tried", "cost_usd", "fixed_ids"}."""
+    import pymupdf
+
+    from src import table_fallback
+
+    out = {"fixed": 0, "tried": 0, "cost_usd": 0.0, "fixed_ids": set()}
+    hard = [(p, t) for p in parsed_pages for t in p.tables if table_fallback.is_hard(t)]
+    if not hard or budget <= 0:
+        return out
+    with pymupdf.open(path) as pdf:
+        for page, table in hard[:budget]:
+            out["tried"] += 1
+            try:
+                repair = table_fallback.reread_table(pdf[page.number], table)
+            except Exception as exc:
+                print(f"    Gemini table re-read failed ({str(exc)[:80]}); keeping the local table")
+                continue
+            out["cost_usd"] += repair.cost_usd
+            if repair.markdown:
+                page.markdown = page.markdown.replace(
+                    table.markdown, table_fallback.replace_table(table.markdown, repair.markdown), 1)
+                out["fixed"] += 1
+                out["fixed_ids"].add(id(table))
+    return out
+
+
+def process(doc: dict, client: GovilClient, out_dir: Path, llm_tables: bool = True) -> dict:
+    """Download every PDF of one record and parse it locally. Tables the local
+    parser could not read are re-read by a cheap Gemini model (only those; at most
+    TABLE_FALLBACK_MAX_PER_DOC per document). Returns the /result payload."""
+    from src import table_fallback
     from src.pdf_parser import parse_pdf
 
     pages, problems, tables = [], [], 0
+    fixed, cost = 0, 0.0
+    budget = table_fallback.MAX_TABLES_PER_DOCUMENT if llm_tables else 0
     pdfs = [f for f in doc["files"] if f.get("ext", "pdf") in ("pdf", "")]
     if not pdfs:
         return {"ok": False, "error": "לרשומה אין קובץ PDF"}
@@ -81,17 +114,23 @@ def process(doc: dict, client: GovilClient, out_dir: Path) -> dict:
         path = out_dir / (f"{doc['record_key']}.pdf" if i == 0 else f"{doc['record_key']}_{i}.pdf")
         if not path.exists() or path.stat().st_size == 0:
             path.write_bytes(client.download(f["url"]))
-        for page in parse_pdf(path):
+        parsed = parse_pdf(path)
+        repaired = repair_hard_tables(path, parsed, budget)
+        budget -= repaired["tried"]
+        fixed += repaired["fixed"]
+        cost += repaired["cost_usd"]
+        for page in parsed:
             number = len(pages)
             tables += len(page.tables)
             for t in page.tables:
-                if t.problems:
+                if t.problems and id(t) not in repaired["fixed_ids"]:
                     problems.append({"page": number, "problems": t.problems})
             pages.append({"number": number, "markdown": page.markdown})
-    return {"ok": True, "pages": pages, "tables": tables, "problems": problems}
+    return {"ok": True, "pages": pages, "tables": tables, "problems": problems,
+            "llm_tables": fixed, "parse_cost_usd": round(cost, 6)}
 
 
-def run(agent_id: str, once: bool) -> None:
+def run(agent_id: str, once: bool, llm_tables: bool = True) -> None:
     server = Server()
     agent = load_agent(agent_id)
     client = GovilClient(agent["source"]["search_url"], agent["source"]["x_client_id"])
@@ -115,7 +154,7 @@ def run(agent_id: str, once: bool) -> None:
         for doc in docs:
             started = time.time()
             try:
-                payload = process(doc, client, out_dir)
+                payload = process(doc, client, out_dir, llm_tables)
             except Exception as exc:
                 payload = {"ok": False, "error": f"{type(exc).__name__}: {exc}"[:400]}
             payload.update(agent_id=agent_id, record_key=doc["record_key"])
@@ -124,7 +163,9 @@ def run(agent_id: str, once: bool) -> None:
             except Exception as exc:
                 status = f"NOT REPORTED ({exc})"
             done += 1
-            print(f"  [{done}] {status:9} {time.time() - started:4.1f}s  {doc['title'][:90]}")
+            extra = (f" | {payload['llm_tables']} tables via Gemini ${payload['parse_cost_usd']:.4f}"
+                     if payload.get("parse_cost_usd") else "")
+            print(f"  [{done}] {status:9} {time.time() - started:4.1f}s  {doc['title'][:80]}{extra}")
     print(f"Queue is empty — {done} documents processed.")
 
 
@@ -155,12 +196,15 @@ def main():
     p_run = sub.add_parser("run")
     p_run.add_argument("--agent", default=DEFAULT_AGENT)
     p_run.add_argument("--once", action="store_true")
+    p_run.add_argument("--no-llm-tables", action="store_true",
+                       help="never send hard tables to Gemini (keep the local parse)")
     p_cat = sub.add_parser("push-catalog")
     p_cat.add_argument("--agent", default=DEFAULT_AGENT)
     p_cat.add_argument("--db", type=Path)
     args = parser.parse_args()
     if args.command == "run":
-        run(args.agent, args.once)
+        llm_tables = not args.no_llm_tables and os.getenv("TABLE_FALLBACK", "1") != "0"
+        run(args.agent, args.once, llm_tables)
     else:
         push_catalog(args.agent, args.db)
 

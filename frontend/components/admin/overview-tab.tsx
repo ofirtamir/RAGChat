@@ -98,7 +98,7 @@ export function OverviewTab({ token, onNavigate }: {
       </div>
 
       {libraries.map(lib => lib.index_cost.documents > 0 && (
-        <IndexCostSummary key={`cost-${lib.agent_id}`} cost={lib.index_cost}
+        <IndexCostSummary key={`cost-${lib.agent_id}`} cost={lib.index_cost} parse={lib.parse_cost}
           catalogTotal={lib.catalog_total} indexed={lib.counts.indexed} />
       ))}
 

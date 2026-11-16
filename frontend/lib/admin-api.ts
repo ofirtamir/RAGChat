@@ -129,6 +129,7 @@ export interface LibraryCounts {
   indexed_chunks: number
   flagged_tables: number
   index_cost: IndexCost
+  parse_cost: { total_usd: number; llm_tables: number }
 }
 
 export interface WorkerStatus {
@@ -165,6 +166,8 @@ export interface LibraryDoc {
   chunks: number | null
   embed_tokens: number | null
   index_cost_usd: number | null
+  llm_tables: number | null
+  parse_cost_usd: number | null
   error: string | null
   updated_at: string
   parsed_at: string | null

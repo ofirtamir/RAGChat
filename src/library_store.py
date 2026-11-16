@@ -38,7 +38,8 @@ _FIELD_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 _LIST_COLUMNS = (
     "agent_id, record_key, title, meta, sort_date, status, auto_index, pages, tables, "
-    "flagged_tables, chars, chunks, embed_tokens, index_cost_usd, error, updated_at, parsed_at, indexed_at"
+    "flagged_tables, chars, chunks, embed_tokens, index_cost_usd, llm_tables, parse_cost_usd, error, "
+    "updated_at, parsed_at, indexed_at"
 )
 
 
@@ -91,7 +92,8 @@ def _migrate() -> None:
     """Columns added after the first release; ALTER TABLE keeps existing rows."""
     with _connect() as conn:
         have = {row[1] for row in conn.execute("PRAGMA table_info(documents)")}
-        for column, ddl in (("embed_tokens", "INTEGER"), ("index_cost_usd", "REAL")):
+        for column, ddl in (("embed_tokens", "INTEGER"), ("index_cost_usd", "REAL"),
+                            ("llm_tables", "INTEGER"), ("parse_cost_usd", "REAL")):
             if column not in have:
                 conn.execute(f"ALTER TABLE documents ADD COLUMN {column} {ddl}")
 
@@ -214,16 +216,19 @@ def status_counts(agent_id: str) -> dict:
         rows = conn.execute(
             "SELECT status, COUNT(*) AS n, COALESCE(SUM(chunks), 0) AS chunks, "
             "COALESCE(SUM(flagged_tables), 0) AS flagged, COUNT(index_cost_usd) AS costed, "
-            "COALESCE(SUM(index_cost_usd), 0) AS cost, COALESCE(SUM(embed_tokens), 0) AS tokens "
+            "COALESCE(SUM(index_cost_usd), 0) AS cost, COALESCE(SUM(embed_tokens), 0) AS tokens, "
+            "COALESCE(SUM(parse_cost_usd), 0) AS parse_cost, COALESCE(SUM(llm_tables), 0) AS llm_tables "
             "FROM documents WHERE agent_id = ? GROUP BY status",
             (agent_id,),
         ).fetchall()
     counts = {s: 0 for s in STATUSES}
-    chunks = flagged = costed = tokens = 0
-    cost = 0.0
+    chunks = flagged = costed = tokens = llm_tables = 0
+    cost = parse_cost = 0.0
     for r in rows:
         counts[r["status"]] = r["n"]
         flagged += r["flagged"]
+        parse_cost += r["parse_cost"]
+        llm_tables += r["llm_tables"]
         if r["status"] == "indexed":
             chunks += r["chunks"]
             costed += r["costed"]
@@ -235,7 +240,8 @@ def status_counts(agent_id: str) -> dict:
             "flagged_tables": flagged,
             "index_cost": {"total_usd": cost, "tokens": tokens, "documents": costed,
                            "avg_per_document_usd": avg,
-                           "projected_catalog_usd": avg * total}}
+                           "projected_catalog_usd": avg * total},
+            "parse_cost": {"total_usd": parse_cost, "llm_tables": llm_tables}}
 
 
 def get_document(agent_id: str, key: str, with_parsed: bool = True) -> dict | None:
@@ -355,7 +361,7 @@ def claim(agent_id: str, limit: int) -> list[dict]:
 
 
 def save_parsed(agent_id: str, key: str, pages: list[dict], tables: int,
-                problems: list[dict]) -> dict | None:
+                problems: list[dict], llm_tables: int = 0, parse_cost_usd: float = 0.0) -> dict | None:
     """Store the worker's parse result. Returns the row (without the Markdown)."""
     chars = sum(len(p.get("markdown", "")) for p in pages)
     blob = gzip.compress(json.dumps(pages, ensure_ascii=False).encode("utf-8"))
@@ -364,9 +370,10 @@ def save_parsed(agent_id: str, key: str, pages: list[dict], tables: int,
         conn.execute(
             "UPDATE documents SET status = 'parsed', pages = ?, tables = ?, flagged_tables = ?, "
             "chars = ?, chunks = NULL, problems = ?, parsed = ?, error = NULL, updated_at = ?, "
-            "parsed_at = ?, indexed_at = NULL WHERE agent_id = ? AND record_key = ?",
+            "parsed_at = ?, indexed_at = NULL, llm_tables = ?, parse_cost_usd = ? "
+            "WHERE agent_id = ? AND record_key = ?",
             (len(pages), tables, len(problems), chars, json.dumps(problems, ensure_ascii=False),
-             blob, now, now, agent_id, key),
+             blob, now, now, llm_tables, parse_cost_usd, agent_id, key),
         )
         conn.commit()
     return get_document(agent_id, key, with_parsed=False)
