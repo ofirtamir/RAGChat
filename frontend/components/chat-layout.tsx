@@ -20,6 +20,7 @@ import {
   AgentInfo,
   AgentFilters,
 } from "@/lib/api"
+import { redirectToSignIn } from "@/lib/auth-redirect"
 import { AgentPanel } from "@/components/agent-panel"
 import { AccessGate } from "@/components/access-gate"
 import { useMe } from "@/lib/use-me"
@@ -102,6 +103,13 @@ export function ChatLayout() {
   const bottomRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   useAutoGrow(inputRef, input)
+
+  // The Google ID token expired and could not be renewed: the backend would
+  // reject every call, so send the user through sign-in again.
+  const authError = authSession?.error
+  useEffect(() => {
+    if (authError) redirectToSignIn()
+  }, [authError])
 
   // Init active session
   useEffect(() => {

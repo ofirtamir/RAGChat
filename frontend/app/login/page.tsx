@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button"
 function LoginContent() {
   const params = useSearchParams()
   const callbackUrl = params.get("callbackUrl") || "/"
+  const sessionExpired = params.get("reason") === "expired"
 
   return (
     <div className="flex min-h-dvh flex-col bg-background" dir="rtl">
@@ -21,6 +22,15 @@ function LoginContent() {
               חיפוש חכם במסמכי שמאות, חוות דעת ודוחות הערכה
             </p>
           </div>
+
+          {sessionExpired && (
+            <p
+              role="status"
+              className="w-full rounded-lg border bg-muted px-4 py-3 text-center text-sm leading-relaxed"
+            >
+              פג תוקף ההתחברות. יש להתחבר שוב כדי להמשיך.
+            </p>
+          )}
 
           <Button
             onClick={() => signIn("google", { callbackUrl })}

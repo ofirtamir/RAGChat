@@ -1,4 +1,6 @@
+import { getSession as getAuthSession } from "next-auth/react"
 import { ThinkingStep } from "@/types/chat"
+import { redirectToSignIn } from "@/lib/auth-redirect"
 
 // Backend base URL (override via NEXT_PUBLIC_BACKEND_ORIGIN, e.g. http://localhost:8000)
 const BACKEND_ORIGIN =
@@ -29,6 +31,64 @@ function authHeaders(token: string | undefined, extra?: HeadersInit): HeadersIni
   return headers
 }
 
+/** Thrown when the backend keeps answering 401 and the user must sign in again. */
+export class AuthExpiredError extends Error {
+  constructor() {
+    super("פג תוקף ההתחברות, יש להתחבר מחדש")
+    this.name = "AuthExpiredError"
+  }
+}
+
+// A caller can keep using a token after it expired (a long-lived closure, or a
+// tab that just woke from sleep). Remember the replacement we fetched for it so
+// later calls with the same stale token skip the failed round trip.
+let replacement: { stale: string | undefined; fresh: string } | null = null
+let pendingSessionToken: Promise<string | null> | null = null
+
+/** The ID token of the current NextAuth session; fetching it renews the token server-side. */
+function currentSessionToken(): Promise<string | null> {
+  pendingSessionToken ??= getAuthSession()
+    .then(session => (session && !session.error && session.idToken) || null)
+    .catch(() => null)
+    .finally(() => { pendingSessionToken = null })
+  return pendingSessionToken
+}
+
+/**
+ * `fetch` against the backend with the Bearer token attached.
+ *
+ * On 401 the session is re-fetched (which renews an expired Google ID token)
+ * and the request is retried once. If the backend still answers 401, or the
+ * session can no longer be renewed, the user is sent to sign in again.
+ */
+export async function authFetch(
+  url: string,
+  token: string | undefined,
+  init: RequestInit = {},
+): Promise<Response> {
+  const send = (t: string | undefined) =>
+    fetch(url, { ...init, headers: authHeaders(t, init.headers) })
+
+  const sent = replacement && replacement.stale === token ? replacement.fresh : token
+  const res = await send(sent)
+  if (res.status !== 401) return res
+
+  const fresh = await currentSessionToken()
+  if (fresh) {
+    // Same token back means it was not an expiry. Give a brand-new token a
+    // moment before the single retry, in case the backend clock trails Google's.
+    if (fresh === sent) await new Promise(resolve => setTimeout(resolve, 1000))
+    const retry = await send(fresh)
+    if (retry.status !== 401) {
+      if (fresh !== token) replacement = { stale: token, fresh }
+      return retry
+    }
+  }
+
+  redirectToSignIn()
+  throw new AuthExpiredError()
+}
+
 // ── Agents (knowledge-base per data source) ──────────────────────────────
 
 export interface AgentFilterField {
@@ -50,7 +110,7 @@ export interface AgentInfo {
 export type AgentFilters = Record<string, string | { from?: string; to?: string }>
 
 export async function getAgents(token: string | undefined): Promise<AgentInfo[]> {
-  const res = await fetch(`${API_BASE}/agents`, { headers: authHeaders(token) })
+  const res = await authFetch(`${API_BASE}/agents`, token)
   if (!res.ok) throw new Error("Failed to fetch agents")
   const data = await res.json()
   return data.agents ?? []
@@ -73,9 +133,9 @@ export async function startAgentIngest(
   limit: number,
   token: string | undefined,
 ): Promise<void> {
-  const res = await fetch(`${API_BASE}/agents/${encodeURIComponent(agentId)}/ingest`, {
+  const res = await authFetch(`${API_BASE}/agents/${encodeURIComponent(agentId)}/ingest`, token, {
     method: "POST",
-    headers: authHeaders(token, { "Content-Type": "application/json" }),
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ limit }),
   })
   if (!res.ok) {
@@ -85,7 +145,7 @@ export async function startAgentIngest(
 }
 
 export async function getIngestStatus(token: string | undefined): Promise<IngestStatus> {
-  const res = await fetch(`${API_BASE}/agents/ingest/status`, { headers: authHeaders(token) })
+  const res = await authFetch(`${API_BASE}/agents/ingest/status`, token)
   if (!res.ok) throw new Error("Failed to fetch ingest status")
   return res.json()
 }
@@ -98,9 +158,9 @@ export async function sendMessage(
   agentId?: string | null,
   filters?: AgentFilters | null,
 ): Promise<ChatApiResponse> {
-  const res = await fetch(`${API_BASE}/chat`, {
+  const res = await authFetch(`${API_BASE}/chat`, token, {
     method: "POST",
-    headers: authHeaders(token, { "Content-Type": "application/json" }),
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       query,
       chat_history: chatHistory,
@@ -130,9 +190,9 @@ export async function sendMessageStreaming(
   agentId?: string | null,
   filters?: AgentFilters | null,
 ): Promise<ChatApiResponse> {
-  const res = await fetch(`${API_BASE}/chat/stream`, {
+  const res = await authFetch(`${API_BASE}/chat/stream`, token, {
     method: "POST",
-    headers: authHeaders(token, { "Content-Type": "application/json" }),
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       query,
       chat_history: chatHistory,
@@ -217,9 +277,8 @@ export async function uploadFiles(
 ): Promise<{ results: { filename: string; status: string; chunks?: number; message?: string }[] }> {
   const formData = new FormData()
   files.forEach(f => formData.append("files", f))
-  const res = await fetch(`${API_BASE}/upload`, {
+  const res = await authFetch(`${API_BASE}/upload`, token, {
     method: "POST",
-    headers: authHeaders(token),
     body: formData,
   })
   if (!res.ok) {
@@ -232,17 +291,14 @@ export async function uploadFiles(
 export async function getDocuments(
   token: string | undefined,
 ): Promise<{ total_chunks: number; documents: { source: string; chunks: number; chars: number }[] }> {
-  const res = await fetch(`${API_BASE}/documents`, {
-    headers: authHeaders(token),
-  })
+  const res = await authFetch(`${API_BASE}/documents`, token)
   if (!res.ok) throw new Error("Failed to fetch documents")
   return res.json()
 }
 
 export async function clearDocuments(token: string | undefined): Promise<void> {
-  const res = await fetch(`${API_BASE}/documents`, {
+  const res = await authFetch(`${API_BASE}/documents`, token, {
     method: "DELETE",
-    headers: authHeaders(token),
   })
   if (!res.ok) throw new Error("Failed to clear documents")
 }
@@ -265,9 +321,7 @@ export interface StoredSession {
 }
 
 export async function listSessions(token: string | undefined): Promise<SessionSummary[]> {
-  const res = await fetch(`${API_BASE}/sessions`, {
-    headers: authHeaders(token),
-  })
+  const res = await authFetch(`${API_BASE}/sessions`, token)
   if (!res.ok) throw new Error("Failed to list sessions")
   const data = await res.json()
   return data.sessions ?? []
@@ -277,9 +331,9 @@ export async function getSession(
   sessionId: string,
   token: string | undefined,
 ): Promise<StoredSession> {
-  const res = await fetch(
+  const res = await authFetch(
     `${API_BASE}/sessions/${encodeURIComponent(sessionId)}`,
-    { headers: authHeaders(token) },
+    token,
   )
   if (!res.ok) throw new Error("Failed to fetch session")
   return res.json()
@@ -289,9 +343,9 @@ export async function upsertSession(
   session: { id: string; title: string; messages: unknown[] },
   token: string | undefined,
 ): Promise<SessionSummary> {
-  const res = await fetch(`${API_BASE}/sessions/${encodeURIComponent(session.id)}`, {
+  const res = await authFetch(`${API_BASE}/sessions/${encodeURIComponent(session.id)}`, token, {
     method: "PUT",
-    headers: authHeaders(token, { "Content-Type": "application/json" }),
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify(session),
   })
   if (!res.ok) throw new Error("Failed to save session")
@@ -302,9 +356,10 @@ export async function deleteSession(
   sessionId: string,
   token: string | undefined,
 ): Promise<void> {
-  const res = await fetch(
+  const res = await authFetch(
     `${API_BASE}/sessions/${encodeURIComponent(sessionId)}`,
-    { method: "DELETE", headers: authHeaders(token) },
+    token,
+    { method: "DELETE" },
   )
   if (!res.ok) throw new Error("Failed to delete session")
 }

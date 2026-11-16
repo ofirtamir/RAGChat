@@ -1,6 +1,7 @@
 // Client for the admin console endpoints (/api/admin/*) and /api/me.
 // Every call carries the Google ID token; the backend decides who is an admin.
 
+import { authFetch } from "@/lib/api"
 import type { AgentFilterField, AgentFilters } from "@/lib/api"
 
 const BACKEND_ORIGIN =
@@ -11,9 +12,10 @@ const API_BASE = `${BACKEND_ORIGIN}/api`
 
 async function call<T>(path: string, token: string | undefined, init?: RequestInit): Promise<T> {
   const headers: Record<string, string> = { ...(init?.headers as Record<string, string>) }
-  if (token) headers["Authorization"] = `Bearer ${token}`
   if (init?.body) headers["Content-Type"] = "application/json"
-  const res = await fetch(`${API_BASE}${path}`, { ...init, headers })
+  // authFetch attaches the token and handles an expired sign-in (one retry
+  // with a renewed token, then back to the login page).
+  const res = await authFetch(`${API_BASE}${path}`, token, { ...init, headers })
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: `HTTP ${res.status}` }))
     throw new Error(typeof err.detail === "string" ? err.detail : `HTTP ${res.status}`)
