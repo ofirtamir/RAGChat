@@ -11,6 +11,7 @@ import {
 } from "@/lib/admin-api"
 import { cn } from "@/lib/utils"
 import { DocumentViewer } from "./document-viewer"
+import { FilterFields, selectClass, withFilter } from "./filter-fields"
 import {
   CARD, DOC_STATUS, DOC_STATUS_ORDER, ErrorNote, IndexCostSummary, num, Pill, relativeTime, shortDate,
   TONE, usdPrecise,
@@ -24,8 +25,6 @@ const ACTIONS: { name: LibraryActionName; label: string; from: DocStatus[]; conf
   { name: "cancel", label: "בטל תור", from: ["queued", "processing"] },
 ]
 
-const selectClass =
-  "h-9 rounded-lg border border-input bg-background px-2.5 text-sm transition-colors focus-visible:border-ring focus-visible:outline-none"
 
 export function LibraryTab({ token }: { token: string | undefined }) {
   const [agents, setAgents] = useState<LibraryAgent[]>([])
@@ -81,15 +80,8 @@ export function LibraryTab({ token }: { token: string | undefined }) {
     return () => clearInterval(timer)
   }, [moving, sync?.running, load, loadAgents])
 
-  const setFilter = (name: string, value: string | { from?: string; to?: string }) => {
-    setFilters(prev => {
-      const next = { ...prev }
-      const empty = typeof value === "string" ? !value : !value.from && !value.to
-      if (empty) delete next[name]
-      else next[name] = value
-      return next
-    })
-  }
+  const setFilter = (name: string, value: string | { from?: string; to?: string }) =>
+    setFilters(prev => withFilter(prev, name, value))
 
   const run = async (action: LibraryActionName, target: { keys: string[] } | { selection: LibrarySelection }) => {
     setBusy(true)
@@ -137,7 +129,6 @@ export function LibraryTab({ token }: { token: string | undefined }) {
     })
   }
   const pageCount = result ? Math.max(1, Math.ceil(result.total / result.page_size)) : 1
-  const filterFields = (agent?.filters ?? []).filter(f => !f.name.includes("Header"))
 
   if (!agents.length) {
     return error
@@ -209,45 +200,7 @@ export function LibraryTab({ token }: { token: string | undefined }) {
           חיפוש בכותרת
           <Input className="mt-1 h-9" value={q} onChange={e => setQ(e.target.value)} placeholder="שם צד, רחוב, גוש…" />
         </label>
-        {filterFields.map(f => {
-          if (f.type === "choice") {
-            return (
-              <label key={f.name} className="text-xs text-muted-foreground">
-                {f.label}
-                <select
-                  className={cn(selectClass, "mt-1 block max-w-[11rem]")}
-                  value={(filters[f.name] as string) ?? ""}
-                  onChange={e => setFilter(f.name, e.target.value)}
-                >
-                  <option value="">הכל</option>
-                  {(f.values ?? []).map(v => <option key={v} value={v}>{v}</option>)}
-                </select>
-              </label>
-            )
-          }
-          if (f.type === "date") {
-            const value = (filters[f.name] as { from?: string; to?: string }) ?? {}
-            return (
-              <label key={f.name} className="text-xs text-muted-foreground">
-                {f.label}
-                <span className="mt-1 flex items-center gap-1">
-                  <Input type="date" className="h-9 w-[8.5rem]" value={value.from ?? ""}
-                    onChange={e => setFilter(f.name, { ...value, from: e.target.value })} />
-                  –
-                  <Input type="date" className="h-9 w-[8.5rem]" value={value.to ?? ""}
-                    onChange={e => setFilter(f.name, { ...value, to: e.target.value })} />
-                </span>
-              </label>
-            )
-          }
-          return (
-            <label key={f.name} className="text-xs text-muted-foreground">
-              {f.label}
-              <Input className="mt-1 h-9 w-24" value={(filters[f.name] as string) ?? ""}
-                onChange={e => setFilter(f.name, e.target.value)} />
-            </label>
-          )
-        })}
+        <FilterFields fields={agent?.filters ?? []} filters={filters} onChange={setFilter} />
         {(q || Object.keys(filters).length > 0) && (
           <Button size="sm" variant="ghost" onClick={() => { setQ(""); setFilters({}) }}>נקה</Button>
         )}

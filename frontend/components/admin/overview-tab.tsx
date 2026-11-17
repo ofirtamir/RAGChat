@@ -10,7 +10,7 @@ import {
 
 export function OverviewTab({ token, onNavigate }: {
   token: string | undefined
-  onNavigate: (tab: "library" | "users" | "usage" | "settings") => void
+  onNavigate: (tab: "library" | "users" | "usage" | "settings" | "quality") => void
 }) {
   const [data, setData] = useState<Overview | null>(null)
   const [error, setError] = useState("")

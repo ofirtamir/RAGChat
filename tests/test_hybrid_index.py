@@ -54,7 +54,8 @@ def test_long_section_is_packed_with_small_overlap_and_tables_stay_whole():
     long_para = " ".join(f"משפט מספר {i} בסעיף הארוך." for i in range(120))
     chunks = chunk_parsed_document([(0, f"3. שומה. {long_para}\n\n**טבלת מגרשים**\n\n{TABLE}")])
     prose = [c for c in chunks if "|---|" not in c.text]
-    assert len(prose) > 3
+    assert len(prose) >= 3
+    assert all(f"משפט מספר {i} " in "".join(c.text for c in chunks) for i in range(120))  # nothing lost
     assert all(len(c.text) <= SECTION_CHUNK_SIZE + 200 for c in prose)
     assert all(c.section.startswith("סעיף 3") for c in chunks)
     assert prose[1].text.split("\n", 1)[1].startswith("…")  # overlap with the previous chunk
@@ -62,12 +63,31 @@ def test_long_section_is_packed_with_small_overlap_and_tables_stay_whole():
     assert "**טבלת מגרשים**" in table.text and "| 303 | 4,246 |" in table.text
 
 
+def test_lines_that_introduce_a_table_go_with_it_not_into_a_tiny_chunk():
+    pages = [(0, "1. רקע. " + "הנכס נמצא בעיר. " * 30 + "\n\n3. המועד הקובע:\n\nלהלן המועד הקובע לשומה:\n\n"
+                 + TABLE + "\n\nסוף הסעיף.")]
+    chunks = chunk_parsed_document(pages)
+    sec3 = [c for c in chunks if c.section.startswith("סעיף 3")]
+    assert "|---|" in sec3[0].text  # no chunk holding only the intro lines
+    assert "3. המועד הקובע:" in sec3[0].text and "להלן המועד הקובע לשומה:" in sec3[0].text
+    assert sum("להלן המועד הקובע" in c.text for c in chunks) == 1
+    # a long paragraph before a table stays in its prose chunk; only its end is copied
+    chunks = chunk_parsed_document([(0, "1. רקע. " + "הנכס נמצא בעיר. " * 30 + "\n\n" + TABLE)])
+    assert "|---|" not in chunks[0].text and chunks[1].text.split("\n", 1)[1].startswith("…")
+
+
 # ── Hebrew keyword normalisation ─────────────────────────────────────────
 
 def test_prefixes_are_indexed_both_ways():
-    terms = hebrew_text.keyword_terms("והשבחה בתל-אביב")
-    assert {"והשבחה", "השבחה", "בתל", "תל", "אביב"} <= set(terms)
-    assert "שבחה" in terms  # two prefix letters at most (ו + ה)
+    terms = hebrew_text.keyword_terms("והשבחה ובתל-אביב")
+    assert {"והשבחה", "השבחה", "ובתל", "בתל", "תל", "אביב"} <= set(terms)  # ו + ב: two prefix letters
+
+
+def test_prefix_stripping_does_not_invent_other_words():
+    terms = set(hebrew_text.keyword_terms("היטל השבחה המועד הקובע מלא בהיטל לשמאי"))
+    assert not terms & {"יטל", "שבחה", "בחה", "ועד", "לא", "מאי"}
+    assert {"מועד", "היטל", "קובע", "שמאי"} <= terms  # real prefixes are still removed
+    assert set(hebrew_text.keyword_terms("והמבנה")) == {"והמבנה", "המבנה", "מבנה"}
 
 
 def test_numbers_and_quotes():
@@ -117,6 +137,8 @@ def index(tmp_path, monkeypatch):
 
 def test_count_sources_and_keys(index):
     assert hybrid_index.count(AGENT) == 4
+    indexed = [getattr(ix, "columns", []) for ix in hybrid_index._table(AGENT).list_indices()]
+    assert ["kw"] in indexed  # the BM25 keyword index is really built
     assert hybrid_index.record_keys(AGENT) == {"a1", "b2", "c3"}
     assert hybrid_index.sources(AGENT) == ["הכרעה a1", "הכרעה b2", "הכרעה c3"]
     assert hybrid_index.sources(AGENT, limit=2) is None
@@ -155,6 +177,34 @@ def test_hits_expand_to_their_section_and_full_document_is_ordered(index):
     assert expanded[0].page_content.startswith("[סעיף 2: שומה]")
     chunks = hybrid_index.chunks_for_source(AGENT, "הכרעה a1")
     assert [c.metadata["chunk_index"] for c in chunks] == [0, 1]
+
+
+def test_search_stages_show_both_rankings_and_survive_a_failed_embedding(index, monkeypatch):
+    import src.embeddings
+
+    stages = hybrid_index.search_stages(AGENT, "פיצויים סעיף 197", k=2)
+    top = stages["rows"][0]
+    assert top["record_key"] == "b2" and top["fused_rank"] == 1 and top["in_top_k"]
+    assert top["semantic_rank"] and top["keyword_rank"] == 1 and top["text"]
+    assert [r["id"] for r in stages["rows"]] == [d.metadata["record_key"] + "_" + str(d.metadata["chunk_index"])
+                                                 for d in hybrid_index.search(AGENT, "פיצויים סעיף 197", k=10)]
+
+    def no_credit(_):
+        raise RuntimeError("RESOURCE_EXHAUSTED")
+
+    monkeypatch.setattr(src.embeddings, "embed_query", no_credit)
+    stages = hybrid_index.search_stages(AGENT, "פיצויים סעיף 197")
+    assert "semantic" in stages["errors"] and stages["rows"][0]["record_key"] == "b2"
+    with pytest.raises(RuntimeError):
+        hybrid_index.search(AGENT, "פיצויים סעיף 197")
+
+
+def test_document_chunks_are_read_back_in_order(index):
+    chunks = hybrid_index.document_chunks(AGENT, "a1")
+    assert [c["chunk_index"] for c in chunks] == [0, 1] and chunks[1]["section"] == "סעיף 2: שומה"
+    assert "vector" not in chunks[0]
+    with pytest.raises(ValueError):
+        hybrid_index.document_chunks(AGENT, "a1' OR '1'='1")
 
 
 def test_reindex_replaces_and_delete_removes(index):

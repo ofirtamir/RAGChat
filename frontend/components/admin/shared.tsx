@@ -1,7 +1,7 @@
 "use client"
 
 import { cn } from "@/lib/utils"
-import type { DocStatus, UsageDay, UserStatus } from "@/lib/admin-api"
+import type { DocStatus, UserStatus } from "@/lib/admin-api"
 
 /** Soft colour tones shared by every status pill in the console. */
 export const TONE = {
@@ -129,15 +129,16 @@ export function monthProjection(costMonth: number): number {
 }
 
 /** Plain bar chart: one bar per day, value read by `pick`. */
-export function DailyBars({ days, pick, format, barClassName }: {
-  days: UsageDay[]
-  pick: (d: UsageDay) => number
+export function DailyBars<T extends { day: string }>({ days, pick, format, barClassName, height = "h-36" }: {
+  days: T[]
+  pick: (d: T) => number
   format: (n: number) => string
   barClassName?: string
+  height?: string
 }) {
   const max = Math.max(...days.map(pick), 0)
   return (
-    <div dir="ltr" className="flex h-36 items-end gap-[3px]">
+    <div dir="ltr" className={cn("flex items-end gap-[3px]", height)}>
       {days.map(d => {
         const value = pick(d)
         return (
@@ -153,6 +154,52 @@ export function DailyBars({ days, pick, format, barClassName }: {
           </div>
         )
       })}
+    </div>
+  )
+}
+
+export const pct = (n: number | null | undefined, digits = 0) =>
+  n == null ? "—" : `${(n * 100).toFixed(digits)}%`
+
+export const seconds = (ms: number | null | undefined) =>
+  ms == null ? "—" : ms < 10000 ? `${(ms / 1000).toFixed(1)} שנ׳` : `${Math.round(ms / 1000)} שנ׳`
+
+export function dateTime(iso: string | null | undefined): string {
+  if (!iso) return "—"
+  const d = new Date(iso)
+  return isNaN(d.getTime()) ? iso : d.toLocaleString("he-IL", { dateStyle: "short", timeStyle: "short" })
+}
+
+/** 7 / 30 / 90 day range chips. */
+export function RangeChips({ value, onChange, options = [7, 30, 90] }: {
+  value: number
+  onChange: (days: number) => void
+  options?: number[]
+}) {
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <span className="text-sm text-muted-foreground">טווח:</span>
+      {options.map(r => (
+        <button key={r} onClick={() => onChange(r)} className="chip" data-active={value === r}>{r} ימים</button>
+      ))}
+    </div>
+  )
+}
+
+/** Card with a quiet title row. */
+export function Panel({ title, action, children, className }: {
+  title: React.ReactNode
+  action?: React.ReactNode
+  children: React.ReactNode
+  className?: string
+}) {
+  return (
+    <div className={cn(CARD, "p-5", className)}>
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+        <p className="text-[13px] font-medium text-muted-foreground">{title}</p>
+        {action}
+      </div>
+      {children}
     </div>
   )
 }

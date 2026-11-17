@@ -93,7 +93,8 @@ def _migrate() -> None:
     with _connect() as conn:
         have = {row[1] for row in conn.execute("PRAGMA table_info(documents)")}
         for column, ddl in (("embed_tokens", "INTEGER"), ("index_cost_usd", "REAL"),
-                            ("llm_tables", "INTEGER"), ("parse_cost_usd", "REAL")):
+                            ("llm_tables", "INTEGER"), ("parse_cost_usd", "REAL"),
+                            ("chunk_stats", "TEXT")):
             if column not in have:
                 conn.execute(f"ALTER TABLE documents ADD COLUMN {column} {ddl}")
 
@@ -253,11 +254,42 @@ def get_document(agent_id: str, key: str, with_parsed: bool = True) -> dict | No
         return None
     out = _row(row)
     out["files"] = json.loads(out["files"])
+    out["chunk_stats"] = json.loads(out["chunk_stats"]) if out.get("chunk_stats") else None
     out["problems"] = json.loads(out["problems"]) if out["problems"] else []
     blob = out.pop("parsed")
     if with_parsed:
         out["parsed_pages"] = json.loads(gzip.decompress(blob)) if blob else []
     return out
+
+
+def chunk_quality(agent_id: str, worst: int = 25) -> dict:
+    """Chunk quality over every indexed document (stats saved at indexing time),
+    plus the documents with the most problem chunks."""
+    with _lock, _connect() as conn:
+        rows = conn.execute(
+            "SELECT record_key, title, chunk_stats FROM documents WHERE agent_id = ? AND status = 'indexed'",
+            (agent_id,),
+        ).fetchall()
+    total = {"documents": len(rows), "measured": 0, "chunks": 0, "chars": 0, "with_problems": 0,
+             "flags": {}, "size_buckets": [0] * 6}
+    ranked = []
+    for r in rows:
+        if not r["chunk_stats"]:
+            continue
+        stats = json.loads(r["chunk_stats"])
+        total["measured"] += 1
+        for key in ("chunks", "chars", "with_problems"):
+            total[key] += stats.get(key, 0)
+        for flag, n in stats.get("flags", {}).items():
+            total["flags"][flag] = total["flags"].get(flag, 0) + n
+        for i, n in enumerate(stats.get("size_buckets", [])[:6]):
+            total["size_buckets"][i] += n
+        if stats.get("with_problems"):
+            ranked.append({"record_key": r["record_key"], "title": r["title"], **stats})
+    ranked.sort(key=lambda d: d["with_problems"] / max(1, d["chunks"]), reverse=True)
+    total["avg_chars"] = total["chars"] / total["chunks"] if total["chunks"] else None
+    total["worst_documents"] = ranked[:worst]
+    return total
 
 
 # ── bulk transitions ─────────────────────────────────────────────────────
@@ -312,11 +344,12 @@ def transition(agent: dict, to_status: str, from_statuses: tuple[str, ...],
 
 def set_status(agent_id: str, key: str, status: str, error: str | None = None,
                chunks: int | None = None, embed_tokens: int | None = None,
-               index_cost_usd: float | None = None) -> None:
+               index_cost_usd: float | None = None, chunk_stats: dict | None = None) -> None:
     now = _now()
     sets, params = ["status = ?", "error = ?", "updated_at = ?"], [status, error, now]
+    stats_json = json.dumps(chunk_stats, ensure_ascii=False) if chunk_stats is not None else None
     for column, value in (("chunks", chunks), ("embed_tokens", embed_tokens),
-                          ("index_cost_usd", index_cost_usd)):
+                          ("index_cost_usd", index_cost_usd), ("chunk_stats", stats_json)):
         if value is not None:
             sets.append(f"{column} = ?")
             params.append(value)

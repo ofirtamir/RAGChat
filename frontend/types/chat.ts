@@ -18,6 +18,10 @@ export interface Message {
   fullDocDecision?: FullDocDecision | null
   plan?: QueryPlan | null
   thinkingSteps?: ThinkingStep[]
+  /** Server id of the answered question; lets the user rate the answer. */
+  questionId?: string | null
+  /** The user's rating: 1 helpful, -1 not helpful. */
+  feedback?: { rating: 1 | -1; comment?: string } | null
   timestamp: Date
 }
 

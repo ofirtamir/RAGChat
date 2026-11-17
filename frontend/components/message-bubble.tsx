@@ -7,11 +7,85 @@ import rehypeRaw from "rehype-raw"
 import { Message, CitationDetail } from "@/types/chat"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 import { cn } from "@/lib/utils"
-import { FileText, Search, MessageCircle, ChevronDown, ExternalLink } from "lucide-react"
+import { FileText, Search, MessageCircle, ChevronDown, ExternalLink, ThumbsUp, ThumbsDown } from "lucide-react"
 import { SourceViewer } from "@/components/source-viewer"
 
 interface MessageBubbleProps {
   message: Message
+  /** Rate the answer (1 / -1, 0 withdraws). Shown only for answers the server logged. */
+  onFeedback?: (rating: 1 | -1 | 0, comment?: string) => Promise<void>
+}
+
+/** 👍 / 👎 under an answer; 👎 asks (optionally) what was wrong. */
+function FeedbackButtons({ message, onFeedback }: {
+  message: Message
+  onFeedback: NonNullable<MessageBubbleProps["onFeedback"]>
+}) {
+  const current = message.feedback?.rating ?? 0
+  const [asking, setAsking] = useState(false)
+  const [comment, setComment] = useState("")
+  const [busy, setBusy] = useState(false)
+  const [failed, setFailed] = useState(false)
+
+  const send = async (rating: 1 | -1 | 0, text?: string) => {
+    setBusy(true)
+    setFailed(false)
+    try {
+      await onFeedback(rating, text)
+      setAsking(false)
+    } catch {
+      setFailed(true)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const button = (rating: 1 | -1, Icon: typeof ThumbsUp, label: string) => (
+    <button
+      type="button"
+      disabled={busy}
+      aria-label={label}
+      title={label}
+      aria-pressed={current === rating}
+      onClick={() => {
+        if (current === rating) return send(0)
+        if (rating === -1) return setAsking(true)
+        return send(1)
+      }}
+      className={cn(
+        "rounded-full p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground",
+        current === rating && "bg-accent text-foreground",
+      )}
+    >
+      <Icon className="h-3.5 w-3.5" />
+    </button>
+  )
+
+  return (
+    <span className="inline-flex flex-wrap items-center gap-1">
+      {button(1, ThumbsUp, "התשובה עזרה")}
+      {button(-1, ThumbsDown, "התשובה לא עזרה")}
+      {failed && <span className="text-[11px] text-red-600">לא נשמר, נסה שוב</span>}
+      {asking && (
+        <span className="flex w-full items-center gap-1.5 pt-1 sm:w-auto sm:pt-0">
+          <input
+            autoFocus
+            dir="rtl"
+            value={comment}
+            maxLength={2000}
+            onChange={e => setComment(e.target.value)}
+            onKeyDown={e => e.key === "Enter" && send(-1, comment)}
+            placeholder="מה היה חסר או שגוי? (לא חובה)"
+            className="h-7 w-64 rounded-full border bg-background px-3 text-xs outline-none focus:border-ring"
+          />
+          <button type="button" disabled={busy} onClick={() => send(-1, comment)}
+            className="h-7 rounded-full bg-foreground px-3 text-xs text-background">שלח</button>
+          <button type="button" onClick={() => setAsking(false)}
+            className="h-7 rounded-full px-2 text-xs text-muted-foreground hover:text-foreground">ביטול</button>
+        </span>
+      )}
+    </span>
+  )
 }
 
 /** [n] / [n, m] → <cite data-num="n">n</cite>; the badge looks the citation up by number. */
@@ -117,7 +191,7 @@ function RouteLabel({ message }: { message: Message }) {
   )
 }
 
-export function MessageBubble({ message }: MessageBubbleProps) {
+export function MessageBubble({ message, onFeedback }: MessageBubbleProps) {
   const [showDetails, setShowDetails] = useState(false)
   const [showThinking, setShowThinking] = useState(false)
   const [openCitation, setOpenCitation] = useState<CitationDetail | null>(null)
@@ -281,8 +355,9 @@ export function MessageBubble({ message }: MessageBubbleProps) {
       <SourceViewer citation={openCitation} onClose={() => setOpenCitation(null)} />
 
       {/* Route label · sources toggle · time */}
-      {(message.route || hasDetails) && (
+      {(message.route || hasDetails || (onFeedback && message.questionId)) && (
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+          {onFeedback && message.questionId && <FeedbackButtons message={message} onFeedback={onFeedback} />}
           <RouteLabel message={message} />
           {hasDetails && (
             <button
