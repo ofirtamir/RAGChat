@@ -7,8 +7,9 @@ nothing there. For each candidate picture the parser found (big enough, shown
 once in the document, no text drawn over it):
 
 1. A free local test keeps only "document" pictures — mostly white with dark,
-   uncoloured ink, like a table or a paragraph. Maps, aerial photos, plans and
-   photographs are colourful or dense and are skipped without any call.
+   uncoloured ink, like a table or a paragraph, or a spreadsheet with coloured
+   cells (a few flat colours). Maps, aerial photos, plans and photographs are
+   mostly mid-tones and are skipped without any call.
 2. A document picture is sent, alone, to a cheap Gemini model, which returns
    a Markdown table, the text as written, or NONE (a picture after all).
 3. Every answer — NONE included — is cached on disk by the image's hash, so
@@ -37,6 +38,12 @@ RENDER_ZOOM = 2.0
 MAX_OUTPUT_TOKENS = 4096
 MIN_WHITE = 0.4         # share of near-white pixels in a document picture
 MAX_COLOUR = 20.0       # mean (max-min) channel spread; photos and maps are far above this
+# A spreadsheet pasted with coloured cells (yellow headers, red/green marks) fails the
+# test above. Measured 2026-11-17 on 40 skipped pictures: its 4 commonest colours
+# cover >= 0.72 of it and mid-tones <= 0.52; maps and photos had mid-tones >= 0.57
+# or flat colours <= 0.69 (one site plan passes: Gemini answers NONE for it).
+MIN_FLAT = 0.70
+MAX_MID_TONES = 0.55
 LABEL = "*[מתוך תמונה במסמך]*"
 CACHE_PATH = DATA_DIR / "image_reads.db"
 
@@ -58,7 +65,9 @@ class Reading:
 # ---------- free local test ----------
 
 def looks_like_document(page, rect) -> bool:
-    """Mostly white with uncoloured ink: a table or a paragraph, not a map or a photo."""
+    """A table or a paragraph, not a map or a photo: either mostly white with
+    uncoloured ink, or a spreadsheet with coloured cells — a few flat colours and
+    few mid-tones (maps, aerial photos and photographs are mostly mid-tones)."""
     import numpy as np
     import pymupdf
 
@@ -67,10 +76,19 @@ def looks_like_document(page, rect) -> bool:
         return False
     rgb = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, 3).astype(np.int16)
     white = float((rgb.min(axis=2) > 200).mean())
+    if white > 0.99:
+        return False                                   # blank
     colour = float((rgb.max(axis=2) - rgb.min(axis=2)).mean())
     # thin strokes of an old scan turn light grey at this size, so "not blank" is
     # measured as non-white pixels rather than dark ones
-    return MIN_WHITE <= white <= 0.99 and colour < MAX_COLOUR
+    if white >= MIN_WHITE and colour < MAX_COLOUR:
+        return True
+    grey = rgb.mean(axis=2)
+    mid_tones = float(((grey > 70) & (grey < 200)).mean())
+    codes = (rgb[..., 0] // 32) * 64 + (rgb[..., 1] // 32) * 8 + rgb[..., 2] // 32
+    counts = np.sort(np.unique(codes, return_counts=True)[1])[::-1]
+    flat = float(counts[:4].sum() / codes.size)
+    return flat >= MIN_FLAT and mid_tones <= MAX_MID_TONES
 
 
 # ---------- cache ----------
@@ -114,19 +132,30 @@ def clean_answer(answer: str) -> str:
     return f"{LABEL}\n\n{text}"
 
 
+def accept(answer: str, finish: str) -> str:
+    """The Markdown to keep from one answer (the online call and the Batch API share this).
+    A reply cut off at the token limit is usually a repetition loop: don't keep it."""
+    return "" if "MAX_TOKENS" in (finish or "") else clean_answer(answer)
+
+
+def render(page, bbox) -> bytes:
+    """The picture's region of the page as PNG, at the resolution the model reads."""
+    import pymupdf
+
+    return page.get_pixmap(matrix=pymupdf.Matrix(RENDER_ZOOM, RENDER_ZOOM), clip=pymupdf.Rect(bbox)).tobytes("png")
+
+
 def read_image(page, image, client=None) -> Reading:
     """One paid call: turn a document picture into Markdown and cache the answer.
     `page` is a PyMuPDF page, `image` a src.pdf_parser.ParsedImage. The caller
     checks the cache and `looks_like_document` first. Raises when the call fails."""
-    import pymupdf
     from google.genai import types
 
-    rect = pymupdf.Rect(image.bbox)
     if client is None:
         from src.embeddings import genai_client
         client = genai_client()
 
-    png = page.get_pixmap(matrix=pymupdf.Matrix(RENDER_ZOOM, RENDER_ZOOM), clip=rect).tobytes("png")
+    png = render(page, image.bbox)
     resp = client.models.generate_content(
         model=MODEL,
         contents=[types.Part.from_bytes(data=png, mime_type="image/png"), PROMPT],
@@ -141,7 +170,6 @@ def read_image(page, image, client=None) -> Reading:
     price_in, price_out = _price(MODEL)
     cost = (inp * price_in + out * price_out) / 1_000_000
     finish = str(getattr(resp.candidates[0], "finish_reason", "") if resp.candidates else "")
-    # a reply cut off at the token limit is usually a repetition loop: don't keep it
-    text = "" if "MAX_TOKENS" in finish else clean_answer(resp.text)
+    text = accept(resp.text, finish)
     remember(image.digest, text)
     return Reading(text=text, cost_usd=cost)

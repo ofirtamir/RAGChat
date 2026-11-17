@@ -12,6 +12,7 @@ Setup (once):
 Usage:
     python scripts/index_worker.py run                 keep processing the queue
     python scripts/index_worker.py run --once          process what is queued and exit
+    python scripts/index_worker.py run --defer-images  read pictures later, at half price (scripts/image_batch.py)
     python scripts/index_worker.py push-catalog        upload the govil-scraper catalog (first load)
 """
 import argparse
@@ -108,13 +109,16 @@ def repair_hard_tables(path: Path, parsed_pages, budget: int) -> dict:
     return out
 
 
-def read_images(path: Path, parsed_pages, budget: int) -> dict:
+def read_images(path: Path, parsed_pages, budget: int, defer_to: str | None = None) -> dict:
     """Put the content of pictured tables/paragraphs in place of their markers.
     Free filtering and the on-disk cache come first; at most `budget` paid calls.
+    With `defer_to` (the document's record key), an unread picture is not read online
+    but queued for the half-price Batch API (scripts/image_batch.py); the document
+    is parsed again once its pictures are answered.
     Returns {"read", "calls", "cost_usd", "unread": [(page, problem)]}."""
     import pymupdf
 
-    from src import image_reader
+    from src import image_batch, image_reader
     from src.pdf_parser import strip_image_markers
 
     out = {"read": 0, "calls": 0, "cost_usd": 0.0, "unread": []}
@@ -129,6 +133,9 @@ def read_images(path: Path, parsed_pages, budget: int) -> dict:
                 text = ""
                 if not image_reader.looks_like_document(pdf_page, pymupdf.Rect(image.bbox)):
                     pass                                   # a map / photo / plan: nothing to read
+                elif defer_to:
+                    image_batch.add_pending(defer_to, path, image)
+                    out["unread"].append((page.number, "picture with text waiting for the batch reading"))
                 elif unavailable:
                     out["unread"].append((page.number, "picture with text not read (Gemini unavailable)"))
                 elif out["calls"] >= budget:
@@ -151,11 +158,13 @@ def read_images(path: Path, parsed_pages, budget: int) -> dict:
     return out
 
 
-def process(doc: dict, client: GovilClient, out_dir: Path, llm_tables: bool = True) -> dict:
+def process(doc: dict, client: GovilClient, out_dir: Path, llm_tables: bool = True,
+            defer_images: bool = False) -> dict:
     """Download every PDF of one record and parse it locally. Paid Gemini calls are
     used only where the local parse has nothing usable: tables it could not read
     (at most TABLE_FALLBACK_MAX_PER_DOC) and tables/text pasted as pictures (after a
-    free filter, at most IMAGE_READER_MAX_PER_DOC). Returns the /result payload."""
+    free filter, at most IMAGE_READER_MAX_PER_DOC; with defer_images, queued for the
+    Batch API instead). Returns the /result payload."""
     from src import image_reader, table_fallback
     from src.pdf_parser import parse_pdf, strip_image_markers
 
@@ -175,7 +184,8 @@ def process(doc: dict, client: GovilClient, out_dir: Path, llm_tables: bool = Tr
         budget -= repaired["tried"]
         fixed += repaired["fixed"]
         cost += repaired["cost_usd"]
-        pictures = read_images(path, parsed, image_budget)
+        pictures = read_images(path, parsed, image_budget,
+                               defer_to=doc["record_key"] if defer_images and llm_tables else None)
         image_budget -= pictures["calls"]
         fixed += pictures["read"]
         cost += pictures["cost_usd"]
@@ -195,7 +205,7 @@ def process(doc: dict, client: GovilClient, out_dir: Path, llm_tables: bool = Tr
             "llm_tables": fixed, "parse_cost_usd": round(cost, 6)}
 
 
-def run(agent_id: str, once: bool, llm_tables: bool = True) -> None:
+def run(agent_id: str, once: bool, llm_tables: bool = True, defer_images: bool = False) -> None:
     server = Server()
     agent = load_agent(agent_id)
     client = GovilClient(agent["source"]["search_url"], agent["source"]["x_client_id"])
@@ -219,7 +229,7 @@ def run(agent_id: str, once: bool, llm_tables: bool = True) -> None:
         for doc in docs:
             started = time.time()
             try:
-                payload = process(doc, client, out_dir, llm_tables)
+                payload = process(doc, client, out_dir, llm_tables, defer_images)
             except Exception as exc:
                 payload = {"ok": False, "error": f"{type(exc).__name__}: {exc}"[:400]}
             payload.update(agent_id=agent_id, record_key=doc["record_key"])
@@ -263,13 +273,16 @@ def main():
     p_run.add_argument("--once", action="store_true")
     p_run.add_argument("--no-llm-tables", action="store_true",
                        help="never send hard tables to Gemini (keep the local parse)")
+    p_run.add_argument("--defer-images", action="store_true",
+                       help="queue unread pictures for the half-price Batch API (scripts/image_batch.py) "
+                            "instead of reading them online")
     p_cat = sub.add_parser("push-catalog")
     p_cat.add_argument("--agent", default=DEFAULT_AGENT)
     p_cat.add_argument("--db", type=Path)
     args = parser.parse_args()
     if args.command == "run":
         llm_tables = not args.no_llm_tables and os.getenv("TABLE_FALLBACK", "1") != "0"
-        run(args.agent, args.once, llm_tables)
+        run(args.agent, args.once, llm_tables, args.defer_images)
     else:
         push_catalog(args.agent, args.db)
 
