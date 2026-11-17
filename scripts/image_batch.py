@@ -74,9 +74,10 @@ def requeue(agent: str, keys: list[str]) -> None:
     server = Server()
     for start in range(0, len(keys), 500):
         part = keys[start:start + 500]
-        queued = server.post("requeue", {"agent_id": agent, "keys": part})["queued"]
-        image_batch.clear_ready(part)
-        print(f"  {queued} documents sent back to the worker's queue")
+        moved = server.post("requeue", {"agent_id": agent, "keys": part})["keys"]
+        image_batch.clear_ready(moved)          # the rest (being parsed or indexed now) stay for the next run
+        print(f"  {len(moved)} documents sent back to the worker's queue"
+              + (f", {len(part) - len(moved)} busy — will retry on the next collect" if len(moved) < len(part) else ""))
 
 
 def collect(agent: str, wait: bool) -> None:

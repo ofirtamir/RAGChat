@@ -228,11 +228,13 @@ def test_worker_requeues_documents_whose_pictures_were_read(client):
     library_store.set_status("test_agent", keys[0], "indexed")
     library_store.set_status("test_agent", keys[1], "parsed")    # keys[2] stays in the catalog
     r = client.post("/api/worker/requeue", json={"agent_id": "test_agent", "keys": keys})
-    assert r.json() == {"queued": 2}
+    assert r.json()["queued"] == 2 and sorted(r.json()["keys"]) == sorted(keys[:2])
     indexed, parsed, untouched = (library_store.get_document("test_agent", k) for k in keys)
     assert indexed["status"] == "queued" and indexed["auto_index"]          # re-indexed after the new parse
     assert parsed["status"] == "queued" and not parsed["auto_index"]
     assert untouched["status"] == "catalog"
+    library_store.set_status("test_agent", keys[1], "processing")   # being parsed: not moved, caller retries
+    assert client.post("/api/worker/requeue", json={"agent_id": "test_agent", "keys": keys}).json()["keys"] == [keys[0]]
     assert client.post("/api/worker/requeue", json={"agent_id": "test_agent", "keys": []}).status_code == 422
 
 

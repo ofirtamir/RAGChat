@@ -232,9 +232,12 @@ def worker_requeue(req: RequeueRequest):
     and are now cached on the indexing machine). An indexed document keeps serving
     its old chunks until the new parse is indexed in their place."""
     agent = _agent(req.agent_id)
+    already = library_store.transition(agent, "queued", ("queued",), keys=req.keys)   # not parsed yet: fine
     indexed = library_store.transition(agent, "queued", ("indexed",), keys=req.keys, auto_index=True)
     others = library_store.transition(agent, "queued", ("parsed", "failed", "no_text"), keys=req.keys)
-    return {"queued": len(indexed) + len(others)}
+    moved = already + indexed + others
+    # documents being parsed or indexed right now are not moved: the caller keeps them and asks again
+    return {"queued": len(moved), "keys": moved}
 
 
 @worker.post("/result")
