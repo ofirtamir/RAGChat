@@ -1,13 +1,17 @@
 """Unit tests for the Hebrew fix layer in src/pdf_parser.py.
 
-Words are (x0, y0, x1, y1, text) boxes as PyMuPDF returns them; x grows to the right.
+Words are (x0, y0, x1, y1, text) boxes; x grows to the right. A word's text is
+*visual*: its characters left to right as they sit on the page, so a Hebrew word
+is stored reversed ("םולש" for שלום). The cases below are lines found in real decisions.
 """
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src.pdf_parser import _fix_parens, _header_rows, _is_num, _line_text  # noqa: E402
+import pytest  # noqa: E402
+
+from src.pdf_parser import _header_rows, _is_num, _line_text, _logical  # noqa: E402
 
 
 def w(x0, x1, text, y0=0.0, y1=10.0):
@@ -15,33 +19,32 @@ def w(x0, x1, text, y0=0.0, y1=10.0):
 
 
 def test_hebrew_words_read_right_to_left():
-    assert _line_text([w(50, 90, "עולם"), w(100, 130, "שלום")]) == "שלום עולם"
+    assert _line_text([w(50, 90, "םלוע"), w(100, 130, "םולש")]) == "שלום עולם"
 
 
-def test_split_number_pieces_glued_left_to_right():
-    # "70,000" stored as touching pieces; plain extraction yields "000 , 70"
-    pieces = [w(59.7, 75, "000"), w(58.2, 59.5, ","), w(45, 58, "70")]
-    assert _line_text(pieces) == "70,000"
+@pytest.mark.parametrize("visual, reading", [
+    (")223 שרגמ(", "(מגרש 223)"),                                    # was "(מגרש )223"
+    (".)11.2.2.3( .ק.ס יפל", "לפי ס.ק. (11.2.2.3)."),               # was ".)11.2.2.3("
+    (":ןלהלדכ ,ןעטנ ,27.04.2026 םוימ", "מיום 27.04.2026, נטען, כדלהלן:"),  # was "2026.04.27:,נטען"
+    ("]1[]ב[ 14 ףיעס", "סעיף 14 [ב][1]"),
+    (".'חי 20", "20 יח'."),                                          # was "יח.'"
+    ("'\"ב םירוגמ\"", "\"מגורים ב\"'"),
+    ("₪ 10,400 ךסב", "בסך 10,400 ₪"),
+    ("10 - 5 ןיב", "בין 5 - 10"),
+    ("22% לש", "של 22%"),
+    ("12×19", "19×12"),
+])
+def test_reading_order_of_real_lines(visual, reading):
+    assert _logical(visual) == reading
 
 
-def test_split_currency_value():
-    pieces = [w(57.1, 62, "6"), w(55.1, 57, "."), w(45.1, 55, "11"), w(40, 45, "$")]
-    assert _line_text(pieces) == "$11.6"
-
-
-def test_number_inside_hebrew_sentence():
-    assert _line_text([w(100, 120, "בסך"), w(60, 90, "10,400"), w(40, 50, "₪")]) == "בסך 10,400 ₪"
-
-
-def test_sentence_final_period_moved_after_number():
-    assert _line_text([w(100, 120, "מיום"), w(40, 90, ".11/11/2025")]) == "מיום 11/11/2025."
-
-
-def test_mirrored_parentheses():
-    assert _fix_parens(")19X12(") == "(19X12)"
-    assert _fix_parens(")(במעוגל") == "(במעוגל)"
-    assert _fix_parens("(תקין)") == "(תקין)"
-    assert _fix_parens("1)") == "1)"
+def test_numbers_and_latin_keep_their_order():
+    assert _logical("1,560,000") == "1,560,000"
+    assert _logical("19/02/2023") == "19/02/2023"
+    assert _logical("$11.6") == "$11.6"
+    assert _logical("Geographer & an expert on urban planning") == "Geographer & an expert on urban planning"
+    assert _logical("ביבא לתב Herzl 5 בוחרב") == "ברחוב Herzl 5 בתל אביב"
+    assert _logical(")19X12(") == "(19X12)"
 
 
 def test_numeric_cells():
@@ -99,9 +102,97 @@ def test_text_first_row_over_numbers_becomes_the_header():
         for c, text in enumerate(row):
             box = (c * 70, r * 10, c * 70 + 60, r * 10 + 8)
             cells.append(box)
-            words.append((box[0] + 1, box[1] + 1, box[2] - 1, box[3] - 1, text))
+            words.append((box[0] + 1, box[1] + 1, box[2] - 1, box[3] - 1, _logical(text)))  # visual form
         rows.append(cells)
     parsed = _build_table(_FakeTable(rows), words)
     first = parsed.markdown.splitlines()[0]
     assert "גוש-חלקה" in first and "כתובת" in first
     assert not any("without header" in p for p in parsed.problems)
+
+
+def test_a_list_typed_left_to_right_keeps_its_order():
+    assert _logical("211, 212, 311") == "211, 212, 311"
+    assert _logical("311 ,212 ,211 תוקלח") == "חלקות 211, 212, 311"
+
+
+def test_rows_cut_in_pieces_are_put_back_and_the_whole_header_is_found():
+    # the building-rights table of a real decision, as PyMuPDF cuts it: the header is
+    # spread over five rows and the cell "מגורים ד'" over two single-piece rows
+    from src.pdf_parser import _fold_fragments
+
+    grid = [
+        ["מס'", "שטח", "", "", "שטחים עיקריים", "מס' קומות"],
+        ["מגרש", "מגרש", "ייעוד", "שימוש", "מעל ±0.00", "עילי"],
+        ["", "", "", "", "0.00 ±", ""],
+        ["", "", "", "", "", ""],
+        ["", "", "מגורים", "", "", ""],
+        ["223", "2,693", "", "מגורים", "4,200", "7"],
+        ["", "", "ד'", "", "", ""],
+        ["321", "3,773", "מגורים ד'", "מגורים", "10,100", "12"],
+        ["339", "3,191", "מגורים ד'", "מגורים", "9,200", "12"],
+    ]
+    spans = [[[c] for c in range(6)] for _ in grid]
+    _fold_fragments(grid, spans)
+    assert grid[5][2] == "מגורים ד'" and not any(grid[4]) and not any(grid[6])
+    hdr, body_start = _header_rows(grid, spans)
+    assert hdr == [0, 1, 2] and body_start == 5
+
+
+def test_a_full_width_title_row_is_not_a_header():
+    grid = [["תכנית", "פרסום", "מהות"],
+            ["מצב קודם", "", ""],
+            ["תמל/1087", "24.12.2018", "מגורים"]]
+    spans = [[[0], [1], [2]], [[0, 1, 2], [1], [2]], [[0], [1], [2]]]
+    hdr, body_start = _header_rows(grid, spans)
+    assert hdr == [0] and body_start == 2
+
+
+def _visual(text):
+    """Reading-order text -> the word boxes it would have on a page (right to left)."""
+    x, words = 500.0, []
+    for token in text.split():
+        words.append((x - 8 * len(token), 0.0, x, 10.0, _logical(token)))
+        x -= 8 * len(token) + 4
+    return words
+
+
+def test_paragraphs_break_at_items_and_after_short_lines():
+    from src.pdf_parser import _paragraphs
+
+    def line(text, y):
+        return [(x0, y, x1, y + 10, t) for x0, _, x1, _, t in _visual(text)]
+
+    words = (line("1. פרטי המקרקעין", 0)
+             + line("הנכס הוא דירת מגורים בקומה שלישית בבניין ותיק ברחוב נמיר", 14)
+             + line("בתל אביב.", 28)
+             + line("א. סביבת הנכס והפיתוח הסביבתי בשכונה", 42)
+             + line("ב. המצב המשפטי והזכויות בנכס", 56))
+    texts = [t for _, t in _paragraphs(words)]
+    assert texts == ["1. פרטי המקרקעין",
+                     "הנכס הוא דירת מגורים בקומה שלישית בבניין ותיק ברחוב נמיר בתל אביב.",
+                     "א. סביבת הנכס והפיתוח הסביבתי בשכונה",
+                     "ב. המצב המשפטי והזכויות בנכס"]
+
+
+def test_brackets_stored_as_shapes_are_detected():
+    from src.pdf_parser import _bracket_votes
+
+    def chars(text):
+        return [(i, 0, i + 1, 10, ch, 12.0, False, 1) for i, ch in enumerate(text)]
+
+    assert _bracket_votes([chars(")223 שרגמ(")]) < 0      # stored as characters: reads right
+    assert _bracket_votes([chars("(223 שרגמ)")]) > 0      # stored as drawn: must be swapped
+
+
+def test_words_are_rebuilt_from_character_positions(tmp_path):
+    pymupdf = pytest.importorskip("pymupdf")
+    from src.pdf_parser import parse_pdf
+
+    doc = pymupdf.open()
+    page = doc.new_page()
+    page.insert_text((60, 60), "Tel Aviv 5")
+    page.insert_text((60, 60), "Tel Aviv 5")          # struck twice, as fake bold is
+    page.insert_text((60, 90), "27.04.2026")
+    path = tmp_path / "d.pdf"
+    doc.save(path)
+    assert parse_pdf(path)[0].markdown == "Tel Aviv 5\n\n27.04.2026"

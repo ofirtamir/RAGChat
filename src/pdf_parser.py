@@ -5,11 +5,17 @@ in visual order, which plain extraction (pypdf, PyMuPDF get_text) mangles:
 reversed table headers, numbers split into reversed pieces ("000 , 70" for
 70,000), mirrored parentheses, and tables flattened into loose lines.
 
-Instead of trusting the text layer's order, text is rebuilt from word boxes:
-- words are grouped into visual lines and read right-to-left;
-- touching non-Hebrew pieces (split numbers, "$11.6") are glued left-to-right;
-- tables use PyMuPDF's cell grid, then phantom columns created by merged header
-  cells are folded away and multi-row headers are combined ("parent - child");
+Instead of trusting the text layer's order, text is rebuilt from the characters'
+positions:
+- the characters of each visual line, sorted by x, are split into words at space
+  characters; a line is then put in reading order with the bidi rules (Hebrew
+  right-to-left; numbers and Latin text left-to-right as a block) — src/pdf_text.py;
+- tables use PyMuPDF's cell grid; rows it cut in pieces are put back, phantom
+  columns created by merged header cells are folded away and multi-row headers
+  are combined ("parent - child") — src/pdf_tables.py;
+- a table used as page layout (a cell full of paragraphs, often with a real table
+  inside) is read as running text, with the inner table in its place;
+- lines become paragraphs that break at headings and list items;
 - recurring letterhead/footer lines are dropped.
 
 Each table is validated; tables that fail come back with `problems` so a
@@ -24,19 +30,11 @@ from pathlib import Path
 
 import pymupdf
 
-HEB = re.compile(r"[א-ת]")
-NUMCELL = re.compile(r"^[\s\d.,\-−%$₪/X×()+]*\d[\s\d.,\-−%$₪/X×()+]*$")
-TOUCH_PT = 1.2  # horizontal gap below this means two words are pieces of one visual token
-MIN_COVERAGE = 0.97
-MAX_COLUMNS = 20
+from src.pdf_tables import ParsedTable, _build_table, _fold_fragments, _header_rows, _is_num  # noqa: F401
+from src.pdf_text import (  # noqa: F401
+    _bracket_votes, _fix_hebrew, _group_lines, _inside, _line_text, _logical, _page_words)
 
-
-@dataclass
-class ParsedTable:
-    markdown: str
-    problems: list[str] = field(default_factory=list)
-    bbox: tuple[float, float, float, float] | None = None  # page coordinates, for re-reading the region
-    numbers: list[str] = field(default_factory=list)       # numeric cell values, to check a re-read
+LONG_CELL = 600           # characters: a table cell this long holds running text, not a value
 
 
 @dataclass
@@ -67,243 +65,6 @@ MIN_IMAGE_AREA = 0.02        # share of the page
 MAX_WORDS_OVER_IMAGE = 4     # text drawn over a picture means it is a background, not content
 
 
-# ---------- text fixes ----------
-
-_CP1255_AS_LATIN = re.compile(r"[à-ú]")
-
-
-def _fix_hebrew(text: str) -> str:
-    """Some old Hebrew fonts map letters to their Windows-1255 byte, which comes out as a
-    Latin-1 character (0xF0 'ð' instead of 'נ'). Windows-1255 0xE0-0xFA is א-ת in Unicode
-    order, so the fix is a shift — applied only to words with no Latin letters."""
-    if not _CP1255_AS_LATIN.search(text) or re.search(r"[A-Za-z]", text):
-        return text
-    return _CP1255_AS_LATIN.sub(lambda m: chr(ord(m.group()) - 0xE0 + 0x5D0), text)
-
-
-def _page_words(page):
-    return [(*w[:4], _fix_hebrew(w[4])) for w in page.get_text("words")]
-
-
-# ---------- lines from word boxes ----------
-
-def _group_lines(words):
-    """words: (x0, y0, x1, y1, text). Group by vertical overlap into visual lines, top to bottom."""
-    lines = []
-    for w in sorted(words, key=lambda w: (w[1] + w[3]) / 2):
-        yc, h = (w[1] + w[3]) / 2, w[3] - w[1]
-        for ln in lines:
-            if abs(ln["yc"] - yc) < 0.5 * min(ln["h"], h):
-                ln["w"].append(w)
-                break
-        else:
-            lines.append({"yc": yc, "h": h, "w": [w]})
-    return lines
-
-
-def _fix_parens(tok: str) -> str:
-    """Mirrored glyphs from RTL producers: ')19X12(' -> '(19X12)', ')(text' -> '(text)'."""
-    if tok.startswith(")(") and len(tok) > 2 and "(" not in tok[2:] and ")" not in tok[2:]:
-        return "(" + tok[2:] + ")"
-    if tok.startswith(")") and tok.endswith("(") and tok.count(")") == tok.count("("):
-        return tok.translate(str.maketrans("()", ")("))
-    return tok
-
-
-def _line_text(words) -> str:
-    words = sorted(words, key=lambda w: -w[2])
-    clusters, cur = [], [words[0]]
-    for w in words[1:]:
-        if cur[-1][0] - w[2] < TOUCH_PT:
-            cur.append(w)
-        else:
-            clusters.append(cur)
-            cur = [w]
-    clusters.append(cur)
-    tokens = []
-    for c in clusters:
-        if any(HEB.search(w[4]) for w in c):
-            tok = "".join(w[4] for w in sorted(c, key=lambda w: -w[2]))
-        else:
-            tok = "".join(w[4] for w in sorted(c, key=lambda w: w[0]))
-            tok = re.sub(r"^([.,:;])(\w.*)$", r"\2\1", tok)  # sentence-final mark landed in front
-        tokens.append(_fix_parens(tok))
-    return " ".join(tokens)
-
-
-def _words_to_text(words) -> str:
-    return " ".join(_line_text(ln["w"]) for ln in _group_lines(words)).strip()
-
-
-def _inside(w, rect, pad=1.0) -> bool:
-    cx, cy = (w[0] + w[2]) / 2, (w[1] + w[3]) / 2
-    return rect[0] - pad <= cx <= rect[2] + pad and rect[1] - pad <= cy <= rect[3] + pad
-
-
-# ---------- tables ----------
-
-def _is_num(s: str) -> bool:
-    """A number, optionally with a short unit (מ"ר, ל"י, ש"ח), or an empty-value dash."""
-    if re.fullmatch(r"\s*[-−–—]{1,3}\s*", s):
-        return True
-    if not re.search(r"\d", s):
-        return False
-    if NUMCELL.match(s):
-        return True
-    return len(HEB.findall(s)) <= 4 and len(re.findall(r"[A-Za-z]", s)) <= 1
-
-
-def _numeric_row(row) -> bool:
-    filled = [x for x in row if x]
-    return bool(filled) and sum(_is_num(x) for x in filled) / len(filled) >= 0.5
-
-
-def _header_rows(grid) -> tuple[list[int], int]:
-    """Header = text rows directly above the longest run of numeric rows."""
-    kinds = ["N" if _numeric_row(r) else ("E" if not any(r) else "T") for r in grid]
-    best_len, body_start, start = 0, -1, None
-    for i, k in enumerate(kinds + ["T"]):
-        if k == "N" and start is None:
-            start = i
-        elif k != "N" and start is not None:
-            if i - start > best_len:
-                best_len, body_start = i - start, start
-            start = None
-    if body_start < 0:
-        return [0], 1
-    hdr, j = [], body_start - 1
-    while j >= 0 and kinds[j] == "T":
-        hdr.insert(0, j)
-        j -= 1
-    if not hdr and body_start > 0:
-        hdr = [body_start - 1]
-    return hdr, body_start
-
-
-def _build_table(table, words) -> ParsedTable:
-    rows = []
-    if table.header.external:
-        rows.append(list(table.header.cells))
-    rows += [list(r.cells) for r in table.rows]
-    ncol = max(len(r) for r in rows)
-    rows = [r + [None] * (ncol - len(r)) for r in rows]
-
-    # each column's x-range comes from the narrowest cell seen at that index
-    colx = []
-    for c in range(ncol):
-        boxes = [r[c] for r in rows if r[c]]
-        colx.append(min(boxes, key=lambda b: b[2] - b[0]) if boxes else None)
-
-    in_table = [w for w in words if _inside(w, table.bbox)]
-    used = set()
-    grid, spans = [], []
-    for r in rows:
-        texts, row_spans = [""] * ncol, [[k] for k in range(ncol)]
-        for c, box in enumerate(r):
-            if not box:
-                continue
-            cell_words = [w for w in in_table if _inside(w, box, 0.5)]
-            if not cell_words:
-                continue
-            used.update(id(w) for w in cell_words)
-            span = [k for k in range(ncol)
-                    if colx[k] and box[0] - 1 <= (colx[k][0] + colx[k][2]) / 2 <= box[2] + 1] or [c]
-            # a merged body cell's value belongs to the column it visually sits in
-            cx = sum((w[0] + w[2]) / 2 for w in cell_words) / len(cell_words)
-            target = next((k for k in span if colx[k][0] <= cx <= colx[k][2]), span[0])
-            texts[target] = _words_to_text(cell_words)
-            row_spans[target] = span
-        grid.append(texts)
-        spans.append(row_spans)
-    coverage = len(used) / max(1, len(in_table))
-
-    hdr, _ = _header_rows(grid)
-
-    # Spread merged header cells across their span, tagged with the span, so stacked
-    # lines of one label join with a space and parent/child labels with " - ".
-    for h in hdr:
-        for c, txt in enumerate(list(grid[h])):
-            if txt:
-                tag = f"{txt}\x00{min(spans[h][c])}-{max(spans[h][c])}"
-                for k in spans[h][c]:
-                    if not grid[h][k] or k == c:
-                        grid[h][k] = tag
-
-    # Fold away empty and phantom columns: merge neighbours that are never both
-    # filled in the same row (identical spread header text doesn't count).
-    nrow = len(grid)
-    cols = [[grid[r][c] for r in range(nrow)] for c in range(ncol)]
-    cols = [c for c in cols if any(c)]
-    merged = True
-    while merged and len(cols) > 1:
-        merged = False
-        for c in range(len(cols) - 1):
-            a, b = cols[c], cols[c + 1]
-            if all(not (a[r] and b[r]) or (r in hdr and a[r] == b[r]) for r in range(nrow)):
-                cols[c] = [a[r] or b[r] for r in range(nrow)]
-                del cols[c + 1]
-                merged = True
-                break
-    cols.reverse()  # rightmost column first, the Hebrew reading order
-
-    header = []
-    for col in cols:
-        label, last_span = "", None
-        for h in hdr:
-            if not col[h]:
-                continue
-            txt, span = col[h].split("\x00")
-            if not label:
-                label = txt
-            elif span == last_span:
-                label += " " + txt
-            elif txt not in label:
-                label += " - " + txt
-            last_span = span
-        header.append(label)
-
-    caption, body = [], []
-    first_hdr = hdr[0] if hdr else 0
-    for r in range(nrow):
-        if r in hdr:
-            continue
-        vals = [col[r] for col in cols]
-        if not any(vals):
-            continue
-        if r < first_hdr and sum(1 for v in vals if v) == 1:
-            caption.append(next(v for v in vals if v))
-        else:
-            body.append(vals)
-
-    # No header found, but the first row has more text cells (labels) than the row
-    # under it: it is the header.
-    def text_cells(row):
-        return sum(1 for v in row if v and not _is_num(v))
-
-    if not any(header) and len(body) >= 2 and text_cells(body[0]) >= 2 \
-            and text_cells(body[0]) > text_cells(body[1]):
-        header, body = body[0], body[1:]
-
-    problems = []
-    if coverage < MIN_COVERAGE:
-        problems.append(f"word coverage {coverage:.0%}")
-    if not 2 <= len(cols) <= MAX_COLUMNS:
-        problems.append(f"{len(cols)} columns")
-    if not body:
-        problems.append("no data rows")
-    unlabeled = sum(1 for i, v in enumerate(header) if not v and any(row[i] for row in body))
-    if unlabeled:
-        problems.append(f"{unlabeled} columns without header")
-
-    def md_row(values):
-        return "| " + " | ".join(v.replace("|", "/") for v in values) + " |"
-
-    md = f"**{' '.join(caption)}**\n\n" if caption else ""
-    md += md_row(header) + "\n|" + "---|" * len(header) + "\n" + "\n".join(md_row(v) for v in body)
-    numbers = [w[4] for w in in_table if re.search(r"\d", w[4])]
-    return ParsedTable(markdown=md, problems=problems, bbox=tuple(table.bbox), numbers=numbers)
-
-
 # ---------- pages ----------
 
 def _norm(s: str) -> str:
@@ -311,13 +72,13 @@ def _norm(s: str) -> str:
     return "".join(re.findall(r"[א-תA-Za-z]", s))
 
 
-def _furniture(doc) -> set[str]:
+def _furniture(doc, cache: dict) -> set[str]:
     """Top/bottom-zone lines that recur on at least half the pages (letterhead, footer)."""
     counts = Counter()
     for page in doc:
         h = page.rect.height
         seen = set()
-        for ln in _group_lines(_page_words(page)):
+        for ln in _group_lines(_page_words(page, cache=cache)):
             if ln["yc"] < 0.18 * h or ln["yc"] > 0.82 * h:
                 key = _norm(_line_text(ln["w"]))
                 if key:
@@ -326,18 +87,27 @@ def _furniture(doc) -> set[str]:
     return {k for k, n in counts.items() if n >= max(3, 0.5 * len(doc))}
 
 
+SHORT_LINE = 0.3    # a line whose left end stops this far (share of the text width) from the margin
+# "1." "6.1." "א." "(ב)" "ג)" "(3)" or a bullet, then a space: the start of a list item or heading
+_ITEM = re.compile(r"^(?:\d{1,2}(?:\.\d{1,2}){0,3}\.|\(?[א-ת]{1,2}[.)]|\(\d{1,2}\)|[•▪■◼○●*–-])\s")
+_GLUED_NUMBER = re.compile(r"^(\d{1,2}(?:\.\d{1,2}){1,3}\.?)(?=[א-ת])")
+_NUMBERED = re.compile(r"^\d{1,2}(?:\.\d{1,2}){1,3}\s+[א-ת]")     # "6.1 מינוי", only after a finished line
+
+
 def _is_noise_line(text: str, yc: float, page_height: float) -> bool:
     if re.fullmatch(r"[_\-−–\s]*", text):
         return True
     return yc > 0.82 * page_height and re.fullmatch(r"[\d\s_\-−–]*", text) is not None
 
 
-def _image_digests(doc) -> Counter:
-    """How many pages each picture appears on (a letterhead logo repeats on every page)."""
-    seen = Counter()
+def _image_digests(doc) -> tuple[Counter, dict]:
+    """How many pages each picture appears on (a letterhead logo repeats on every page),
+    and each page's picture list (hashing is slow, so it is done once)."""
+    seen, infos = Counter(), {}
     for page in doc:
-        seen.update({_digest(i) for i in page.get_image_info(hashes=True)})
-    return seen
+        infos[page.number] = page.get_image_info(hashes=True)
+        seen.update({_digest(i) for i in infos[page.number]})
+    return seen, infos
 
 
 def _digest(info) -> str:
@@ -345,11 +115,12 @@ def _digest(info) -> str:
     return d.hex() if isinstance(d, bytes) else str(d)
 
 
-def _content_images(page, words, repeated: Counter, start: int) -> list[ParsedImage]:
+def _content_images(page, words, pictures: tuple[Counter, dict], start: int) -> list[ParsedImage]:
     """Pictures big enough to hold a table or a paragraph, shown once in the document,
     with no text layer drawn over them."""
+    repeated, infos = pictures
     found, area = [], page.rect.width * page.rect.height
-    for info in page.get_image_info(hashes=True):
+    for info in infos[page.number]:
         rect = pymupdf.Rect(info["bbox"]) & page.rect
         digest = _digest(info)
         if rect.is_empty or rect.width < MIN_IMAGE_PT[0] or rect.height < MIN_IMAGE_PT[1]:
@@ -364,39 +135,79 @@ def _content_images(page, words, repeated: Counter, start: int) -> list[ParsedIm
     return found
 
 
-def _parse_page(page, furniture, repeated: Counter | None = None, image_start: int = 0) -> ParsedPage:
-    words = _page_words(page)
-    blocks, tables = [], []
-    images = _content_images(page, words, repeated, image_start) if repeated is not None else []
-    for img in images:
-        blocks.append((img.bbox[1], img.marker))
-    table_rects = []
-    for t in page.find_tables().tables:
-        if t.row_count < 2 or t.col_count < 2:
-            continue
-        parsed = _build_table(t, words)
-        tables.append(parsed)
-        table_rects.append(pymupdf.Rect(t.bbox))
-        blocks.append((t.bbox[1], parsed.markdown))
+def _paragraphs(words, furniture=(), page_height: float = 0.0) -> list[tuple[float, str]]:
+    """Words of one column of running text -> (top y, text) paragraphs.
 
-    free = [w for w in words if not any(_inside(w, r, 2) for r in table_rects)]
+    A paragraph ends at a vertical gap, at a line that stops well short of the left
+    margin (its last line, or a heading), and before a numbered / lettered / bulleted
+    item — so "1. פרטי המקרקעין" starts its own block instead of drowning in the text
+    around it (the section chunker looks for exactly these lines)."""
     lines = []
-    for ln in _group_lines(free):
-        text = _line_text(ln["w"])
-        if _norm(text) in furniture or _is_noise_line(text, ln["yc"], page.rect.height):
+    for ln in _group_lines(words):
+        text = _GLUED_NUMBER.sub(lambda m: m.group(1) + " ", _line_text(ln["w"]))
+        if _norm(text) in furniture or (page_height and _is_noise_line(text, ln["yc"], page_height)):
             continue
         lines.append((ln, text))
-
-    para, prev = [], None
+    left = min((w[0] for ln, _ in lines for w in ln["w"]), default=0)
+    right = max((w[2] for ln, _ in lines for w in ln["w"]), default=0)
+    blocks, para, prev, prev_text = [], [], None, ""
     for ln, text in lines:
-        if para and ln["yc"] - prev["yc"] > 1.9 * max(ln["h"], prev["h"]):
-            blocks.append((para[0][0]["yc"], " ".join(t for _, t in para)))
-            para = []
+        if para:
+            short = min(w[0] for w in prev["w"]) - left > SHORT_LINE * (right - left)
+            ended = short or prev_text.rstrip().endswith((".", ":", ";"))
+            if ln["yc"] - prev["yc"] > 1.9 * max(ln["h"], prev["h"]) or short                     or _ITEM.match(text) or (ended and _NUMBERED.match(text)):
+                blocks.append((para[0][0]["yc"], " ".join(t for _, t in para)))
+                para = []
         para.append((ln, text))
-        prev = ln
+        prev, prev_text = ln, text
     if para:
         blocks.append((para[0][0]["yc"], " ".join(t for _, t in para)))
+    return blocks
 
+
+def _cells(table) -> list[tuple]:
+    return list({tuple(c) for row in table.rows for c in row.cells if c})
+
+
+def _parse_page(page, furniture, pictures=None, image_start: int = 0, cache: dict | None = None) -> ParsedPage:
+    found = [t for t in page.find_tables().tables if t.row_count >= 2 and t.col_count >= 2]
+    cuts = {(round(x, 1), cell[1], cell[3]) for t in found for cell in _cells(t) for x in (cell[0], cell[2])}
+    words = _page_words(page, cuts, cache)
+    blocks, tables = [], []
+    images = _content_images(page, words, pictures, image_start) if pictures is not None else []
+    for img in images:
+        blocks.append((img.bbox[1], img.marker))
+
+    # A "layout table" is a table used as page layout: a cell holds paragraphs of text,
+    # often with a real table inside it. As a Markdown table it would be one endless
+    # row with the inner table's numbers poured into it, so it is read as running
+    # text instead, cell by cell (right to left), with the inner table in its place.
+    rects = {id(t): pymupdf.Rect(t.bbox) for t in found}
+    inner = {id(t) for t in found
+             if any(o is not t and rects[id(o)].contains(rects[id(t)]) for o in found)}
+    layout = {id(t) for t in found if id(t) not in inner and (
+        any(id(i) in inner and rects[id(t)].contains(rects[id(i)]) for i in found)
+        or any(sum(len(w[4]) + 1 for w in words if _inside(w, c, 0.5)) > LONG_CELL for c in _cells(t)))}
+    width = page.rect.width
+    for t in found:
+        if id(t) not in layout:
+            parsed = _build_table(t, words)
+            tables.append(parsed)
+            blocks.append((t.bbox[1], parsed.markdown))
+            continue
+        inside = [rects[id(i)] for i in found if id(i) in inner and rects[id(t)].contains(rects[id(i)])]
+        mine = [w for w in words if _inside(w, t.bbox) and not any(_inside(w, r, 2) for r in inside)]
+        taken = set()
+        for cell in sorted(_cells(t), key=lambda c: (c[1], -c[2])):
+            cell_words = [w for w in mine if id(w) not in taken and _inside(w, cell, 0.5)]
+            taken.update(id(w) for w in cell_words)
+            # cells of one row start at the same height: the rightmost is read first
+            blocks += [(y + (width - cell[2]) * 1e-4, text) for y, text in _paragraphs(cell_words)]
+        blocks += _paragraphs([w for w in mine if id(w) not in taken])
+
+    table_rects = list(rects.values())
+    free = [w for w in words if not any(_inside(w, r, 2) for r in table_rects)]
+    blocks += _paragraphs(free, furniture, page.rect.height)
     blocks.sort(key=lambda b: b[0])
     return ParsedPage(number=page.number, markdown="\n\n".join(b[1] for b in blocks),
                       tables=tables, images=images)
@@ -411,11 +222,17 @@ def parse_pdf(source: str | Path | bytes, image_markers: bool = False) -> list[P
     (`strip_image_markers`)."""
     doc = pymupdf.open(stream=source, filetype="pdf") if isinstance(source, bytes) else pymupdf.open(source)
     with doc:
-        furniture = _furniture(doc)
-        repeated = _image_digests(doc) if image_markers else None
+        cache = {}
+        furniture = _furniture(doc, cache)
+        votes = {n: _bracket_votes(entry[0]) for n, entry in cache.items()}
+        overall = sum(votes.values()) > 0
+        for n, entry in cache.items():
+            entry[2] = votes[n] > 0 if votes[n] else overall
+        pictures = _image_digests(doc) if image_markers else None
         pages, count = [], 0
         for page in doc:
-            parsed = _parse_page(page, furniture, repeated, count)
+            parsed = _parse_page(page, furniture, pictures, count, cache)
+            cache.pop(page.number, None)
             count += len(parsed.images)
             pages.append(parsed)
         return pages
