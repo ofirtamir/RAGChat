@@ -3,13 +3,15 @@
 import { useEffect, useState } from "react"
 import Link from "next/link"
 import { signOut, useSession } from "next-auth/react"
-import { ArrowRight, BarChart3, FileText, LayoutDashboard, Settings, Users } from "lucide-react"
+import { ArrowRight, BarChart3, FileText, LayoutDashboard, ScanSearch, Settings, ThumbsUp, Users } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { ThemeToggle } from "@/components/theme-toggle"
 import { getMe, Me } from "@/lib/admin-api"
 import { cn } from "@/lib/utils"
 import { LibraryTab } from "./library-tab"
 import { OverviewTab } from "./overview-tab"
+import { QualityTab } from "./quality-tab"
+import { SearchLabTab } from "./search-lab-tab"
 import { SettingsTab } from "./settings-tab"
 import { UsageTab } from "./usage-tab"
 import { UsersTab } from "./users-tab"
@@ -17,6 +19,8 @@ import { UsersTab } from "./users-tab"
 const TABS = [
   { id: "overview", label: "סקירה", icon: LayoutDashboard },
   { id: "library", label: "מסמכים", icon: FileText },
+  { id: "quality", label: "איכות תשובות", icon: ThumbsUp },
+  { id: "search", label: "בדיקת חיפוש", icon: ScanSearch },
   { id: "users", label: "משתמשים", icon: Users },
   { id: "usage", label: "שימוש ועלויות", icon: BarChart3 },
   { id: "settings", label: "הגדרות", icon: Settings },
@@ -100,6 +104,8 @@ export function AdminShell({ token }: { token: string | undefined }) {
       <main className="mx-auto max-w-7xl px-4 py-6 sm:px-6 sm:py-8">
         {tab === "overview" && <OverviewTab token={token} onNavigate={setTab} />}
         {tab === "library" && <LibraryTab token={token} />}
+        {tab === "quality" && <QualityTab token={token} />}
+        {tab === "search" && <SearchLabTab token={token} />}
         {tab === "users" && <UsersTab token={token} />}
         {tab === "usage" && <UsageTab token={token} />}
         {tab === "settings" && <SettingsTab token={token} />}

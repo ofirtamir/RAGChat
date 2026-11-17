@@ -10,7 +10,9 @@ Decisions are organised in numbered sections ("1. מטרת ההחלטה", "9.4 .
 Chunks never span two top-level sections, carry their section heading, and
 are packed up to SECTION_CHUNK_SIZE characters. Tables stay whole (or are split
 by rows with the header repeated, see src/chunker) together with the caption
-and the end of the paragraph that introduces them. Consecutive prose chunks of
+and the short lines that introduce them (moved into the table's chunk, up to
+TABLE_CONTEXT_CHARS), or the end of a longer introducing paragraph (copied).
+Consecutive prose chunks of
 the same section overlap by the last sentence of the previous chunk, at most
 SECTION_OVERLAP characters.
 """
@@ -19,6 +21,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+from config import TABLE_CONTEXT_CHARS
 from src.chunker import _context_tail, _is_caption, _is_table, _table_chunks
 
 SECTION_CHUNK_SIZE = 1000
@@ -125,6 +128,21 @@ def _split_long(text: str) -> list[str]:
     return parts
 
 
+def _lead_in(buf: list[str]) -> str:
+    """Move the short paragraphs that lead into a table ("להלן המועד הקובע:",
+    sub-headings) out of the prose buffer, so they go with the table instead of
+    being left behind as a tiny chunk of their own. Empties `buf` when only the
+    overlap from the previous chunk would be left."""
+    lead: list[str] = []
+    while buf and not buf[-1].startswith("…"):
+        if sum(len(p) + 2 for p in lead) + len(buf[-1]) > TABLE_CONTEXT_CHARS:
+            break
+        lead.insert(0, buf.pop())
+    if lead and all(p.startswith("…") for p in buf):
+        buf.clear()
+    return "\n\n".join(lead)
+
+
 def chunk_parsed_document(pages: list[tuple[int, str]]) -> list[Chunk]:
     """pages: [(page_number, markdown)] in order. Returns chunks with page and section."""
     blocks = _blocks(pages)
@@ -175,7 +193,7 @@ def chunk_parsed_document(pages: list[tuple[int, str]]) -> list[Chunk]:
             else:  # a bold line that isn't a table caption: treat as prose
                 blocks[i] = Block(block.text, block.page, "prose")
                 continue
-        context = _context_tail(last_prose) if last_prose else ""
+        context = _lead_in(buf) or (_context_tail(last_prose) if last_prose else "")
         flush()
         for part in _table_chunks(block.text, caption, context):
             chunks.append(Chunk(label(part), block.page, section))

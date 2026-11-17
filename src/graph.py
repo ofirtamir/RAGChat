@@ -98,6 +98,13 @@ def _extract_citations(docs: list[Document], agent_id: str | None = None,
     return citations
 
 
+def _retrieval_trace(docs: list[Document]) -> list[dict]:
+    """Which chunks reached the answer model and how they scored — kept in the
+    admin question log, never sent to the browser."""
+    keys = ("record_key", "source", "page", "section", "chunk_index", "_score", "_rerank")
+    return [{k.lstrip("_"): doc.metadata.get(k) for k in keys} for doc in docs]
+
+
 def _build_history_messages(chat_history: list[dict], limit: int = 10) -> list:
     """Convert chat history to LangChain Message objects (NOT tuples).
     Using Message objects avoids template variable interpolation issues
@@ -601,6 +608,7 @@ def _build_result(result: dict, query: str) -> dict:
         "plan": result.get("plan") or create_fallback_plan(query),
         "sources": result.get("sources", []),
         "citations": _extract_citations(result.get("documents", []), result.get("agent_id")),
+        "retrieval": _retrieval_trace(result.get("documents", [])),
         "route": result.get("route"),
         "rewritten": result.get("rewritten"),
         "full_doc_decision": result.get("full_doc_decision"),

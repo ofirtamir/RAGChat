@@ -8,32 +8,36 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Button } from "@/components/ui/button"
 import { getLibraryDoc, LibraryActionName, LibraryDocDetail } from "@/lib/admin-api"
 import { cn } from "@/lib/utils"
+import { ChunkViewer } from "./chunk-viewer"
 import { DOC_STATUS, ErrorNote, num, Pill, shortDate, TONE, usdPrecise } from "./shared"
 
 /** Shows what the parser produced for one document, page by page, next to its details. */
-export function DocumentViewer({ agentId, recordKey, token, onClose, onAction }: {
+export function DocumentViewer({ agentId, recordKey, token, onClose, onAction, initialView = "pages" }: {
   agentId: string
   recordKey: string | null
   token: string | undefined
   onClose: () => void
-  onAction: (action: LibraryActionName, key: string) => Promise<void>
+  onAction?: (action: LibraryActionName, key: string) => Promise<void>
+  initialView?: "pages" | "chunks"
 }) {
   const [doc, setDoc] = useState<LibraryDocDetail | null>(null)
   const [error, setError] = useState("")
   const [raw, setRaw] = useState(false)
   const [onlyFlagged, setOnlyFlagged] = useState(false)
   const [busy, setBusy] = useState(false)
+  const [view, setView] = useState<"pages" | "chunks">(initialView)
 
   useEffect(() => {
     setDoc(null)
     setError("")
     setOnlyFlagged(false)
+    setView(initialView)
     if (!recordKey) return
     getLibraryDoc(agentId, recordKey, token).then(setDoc).catch(e => setError(e.message))
-  }, [agentId, recordKey, token])
+  }, [agentId, recordKey, token, initialView])
 
   const act = async (action: LibraryActionName) => {
-    if (!doc) return
+    if (!doc || !onAction) return
     setBusy(true)
     try {
       await onAction(action, doc.record_key)
@@ -97,23 +101,34 @@ export function DocumentViewer({ agentId, recordKey, token, onClose, onAction }:
                 קובץ המקור{doc.files.length > 1 ? ` ${i + 1}` : ""}
               </a>
             ))}
-            {(doc.status === "parsed" || doc.status === "indexed") && (
+            {onAction && (doc.status === "parsed" || doc.status === "indexed") && (
               <Button size="sm" disabled={busy} onClick={() => act("index")}>
                 {doc.status === "indexed" ? "אנדקס מחדש" : "הכנס לאינדקס"}
               </Button>
             )}
-            {doc.status === "indexed" && (
+            {onAction && doc.status === "indexed" && (
               <Button size="sm" variant="outline" disabled={busy} onClick={() => act("unindex")}>
                 הסר מהאינדקס
               </Button>
             )}
-            {["catalog", "parsed", "failed", "no_text"].includes(doc.status) && (
+            {onAction && ["catalog", "parsed", "failed", "no_text"].includes(doc.status) && (
               <Button size="sm" variant="outline" disabled={busy} onClick={() => act("queue")}>
                 {doc.status === "catalog" ? "הורד ופרסר" : "פרסר מחדש"}
               </Button>
             )}
             <span className="flex-1" />
-            {flaggedPages.size > 0 && (
+            {doc.parsed_pages.length > 0 && (
+              <div className="flex gap-1 rounded-full border p-0.5">
+                {(["pages", "chunks"] as const).map(v => (
+                  <button key={v} onClick={() => setView(v)}
+                    className={cn("rounded-full px-3 py-1 text-xs transition-colors",
+                      view === v ? "bg-foreground text-background" : "text-muted-foreground hover:text-foreground")}>
+                    {v === "pages" ? "עמודים" : `קטעים${doc.chunks != null ? ` (${num(doc.chunks)})` : ""}`}
+                  </button>
+                ))}
+              </div>
+            )}
+            {view === "pages" && flaggedPages.size > 0 && (
               <label className="flex items-center gap-1.5 text-xs">
                 <input type="checkbox" checked={onlyFlagged} onChange={e => setOnlyFlagged(e.target.checked)} />
                 רק עמודים עם טבלה מסומנת ({flaggedPages.size})
@@ -127,14 +142,18 @@ export function DocumentViewer({ agentId, recordKey, token, onClose, onAction }:
         )}
 
         <div className="scrollbar-thin min-h-0 flex-1 space-y-3 overflow-y-auto rounded-2xl bg-muted/50 p-3 sm:p-4">
-          {doc && pages.length === 0 && (
+          {doc && view === "chunks" && (
+            <ChunkViewer agentId={agentId} recordKey={doc.record_key} indexed={doc.status === "indexed"}
+              token={token} raw={raw} />
+          )}
+          {doc && view === "pages" && pages.length === 0 && (
             <p className="py-10 text-center text-sm text-muted-foreground">
               {doc.parsed_pages.length === 0
                 ? "המסמך עדיין לא פורסר. בחר ״הורד ופרסר״ והפעל את סוכן האינדוקס במחשב."
                 : "אין עמודים להצגה."}
             </p>
           )}
-          {pages.map(page => {
+          {view === "pages" && pages.map(page => {
             const problems = flaggedPages.get(page.number)
             return (
               <section

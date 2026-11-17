@@ -17,6 +17,7 @@ export interface ChatApiResponse {
   rewritten: { original_query: string; rewritten_queries: string[]; reasoning: string } | null
   full_doc_decision: { needs_full_document: boolean; target_sources: string[]; reasoning: string } | null
   plan: { is_complex: boolean; sub_queries: string[]; reasoning: string } | null
+  question_id?: string | null
 }
 
 /**
@@ -235,6 +236,21 @@ export async function sendMessageStreaming(
 
   if (!result) throw new Error("No result received from stream")
   return result
+}
+
+/** Rate an answer: 1 helpful, -1 not helpful, 0 withdraw. */
+export async function sendFeedback(
+  questionId: string,
+  rating: 1 | -1 | 0,
+  comment: string | undefined,
+  token: string | undefined,
+): Promise<void> {
+  const res = await authFetch(`${API_BASE}/questions/${encodeURIComponent(questionId)}/feedback`, token, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ rating, comment: comment || null }),
+  })
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
 }
 
 export interface SourceDocument {

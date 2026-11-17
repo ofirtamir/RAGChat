@@ -3,7 +3,9 @@
 import { useEffect, useState } from "react"
 import { getUsage, UsageSummary } from "@/lib/admin-api"
 import { cn } from "@/lib/utils"
+import { CostPanel, EngagementPanel } from "./insights-panels"
 import { CARD, DailyBars, ErrorNote, monthProjection, num, StatCard, usd } from "./shared"
+import { UserDrawer } from "./user-drawer"
 
 const RANGES = [7, 30, 90]
 
@@ -11,6 +13,7 @@ export function UsageTab({ token }: { token: string | undefined }) {
   const [days, setDays] = useState(30)
   const [data, setData] = useState<UsageSummary | null>(null)
   const [error, setError] = useState("")
+  const [openUser, setOpenUser] = useState<string | null>(null)
 
   useEffect(() => {
     getUsage(days, token).then(setData).catch(e => setError(e.message))
@@ -71,7 +74,7 @@ export function UsageTab({ token }: { token: string | undefined }) {
           </thead>
           <tbody>
             {(data.top_users ?? []).map(u => (
-              <tr key={u.sub}>
+              <tr key={u.sub} className="cursor-pointer" onClick={() => setOpenUser(u.sub)}>
                 <td>
                   {u.name || "—"} <span dir="ltr" className="text-xs text-muted-foreground">{u.email}</span>
                 </td>
@@ -87,6 +90,10 @@ export function UsageTab({ token }: { token: string | undefined }) {
           </tbody>
         </table>
       </div>
+
+      <CostPanel token={token} days={days} />
+      <EngagementPanel token={token} onOpenUser={setOpenUser} />
+      <UserDrawer sub={openUser} token={token} onClose={() => setOpenUser(null)} />
 
       <p className="text-xs text-muted-foreground">
         העלויות הן הערכה: מספר הטוקנים שהמודל דיווח כפול המחירים שבהגדרות. החיוב בפועל מופיע ב-Google AI Studio.

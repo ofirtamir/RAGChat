@@ -9,6 +9,7 @@ import { ThinkingIndicator } from "@/components/thinking-indicator"
 import { Message, ChatSession, ThinkingStep } from "@/types/chat"
 import {
   sendMessageStreaming,
+  sendFeedback,
   listSessions,
   getSession,
   upsertSession,
@@ -282,6 +283,7 @@ export function ChatLayout() {
         fullDocDecision: result.full_doc_decision,
         plan: result.plan,
         thinkingSteps: [...thinkingStepsRef.current],
+        questionId: result.question_id ?? null,
         timestamp: new Date(),
       }
       updateSession(activeId, s => ({ ...s, messages: [...s.messages, assistantMsg] }))
@@ -314,6 +316,21 @@ export function ChatLayout() {
       setIsStreaming(false)
       thinkingStepsRef.current = []
       setTimeout(() => inputRef.current?.focus(), 0)
+    }
+  }
+
+  /** Rate an answer, then keep the rating on the message so it survives a reload. */
+  const handleFeedback = async (messageId: string, rating: 1 | -1 | 0, comment?: string) => {
+    const session = activeSession
+    const message = session?.messages.find(m => m.id === messageId)
+    if (!session || !message?.questionId) return
+    await sendFeedback(message.questionId, rating, comment, authToken)
+    const feedback = rating === 0 ? null : { rating, comment }
+    const messages = session.messages.map(m => (m.id === messageId ? { ...m, feedback } : m))
+    updateSession(session.id, s => ({ ...s, messages }))
+    if (authToken) {
+      upsertSession({ id: session.id, title: session.title, messages }, authToken)
+        .catch(err => console.error("Failed to save session:", err))
     }
   }
 
@@ -399,7 +416,8 @@ export function ChatLayout() {
           <div className="scrollbar-thin flex-1 overflow-y-auto">
             <div className="mx-auto w-full max-w-3xl space-y-8 px-4 pb-10 pt-4 sm:px-6">
               {activeSession?.messages.map(msg => (
-                <MessageBubble key={msg.id} message={msg} />
+                <MessageBubble key={msg.id} message={msg}
+                  onFeedback={(rating, comment) => handleFeedback(msg.id, rating, comment)} />
               ))}
               {isLoading && !isStreaming && (
                 <ThinkingIndicator steps={thinkingSteps} currentNode={currentNode} />

@@ -54,8 +54,11 @@ def store_document(agent: dict, doc: dict, chunks: list[Chunk], vectors: list[li
     hybrid_index.replace_document(agent, doc["record_key"], rows)
     admin_store.record_usage(user_sub=None, kind="indexing", model=model_note, input_tokens=tokens,
                              output_tokens=0, agent_id=agent["id"], cost_usd=cost)
+    from src.chunk_quality import analyse
+
+    _, stats = analyse([{"text": c.text, "section": c.section, "page": c.page} for c in chunks])
     library_store.set_status(agent["id"], doc["record_key"], "indexed", chunks=len(chunks),
-                             embed_tokens=tokens, index_cost_usd=cost)
+                             embed_tokens=tokens, index_cost_usd=cost, chunk_stats=stats)
 
 
 def index_document(agent: dict, key: str) -> dict:

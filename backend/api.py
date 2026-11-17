@@ -9,6 +9,7 @@ import uuid
 import json
 import re
 import asyncio
+import time
 from pathlib import Path
 from typing import AsyncGenerator
 from concurrent.futures import ThreadPoolExecutor
@@ -24,11 +25,12 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.graph import run_rag_pipeline, stream_rag_pipeline
 from src.observability import initialize_langfuse
-from src import admin_store, library_index, sessions_store
-from src.usage_tracker import UsageCollector
+from src import admin_store, chat_log, library_index, sessions_store
+from src.chat_log import new_usage_collector as _new_usage_collector, record_chat as _record_chat_usage
 from .admin_api import admin as admin_router, worker as worker_router
+from .admin_insights_api import router as admin_insights_router
+from .feedback_api import router as feedback_router
 from .auth import access_state, get_active_user, get_active_user_id, get_current_user, require_admin
-from config import LLM_MODEL
 
 app =FastAPI(title="RAGChat API", version="1.0.0")
 
@@ -51,6 +53,8 @@ initialize_langfuse()
 
 app.include_router(admin_router)
 app.include_router(worker_router)
+app.include_router(admin_insights_router)
+app.include_router(feedback_router)
 library_index.resume_interrupted()
 
 # Size the pool based on available CPUs.  Each streaming request blocks a
@@ -75,6 +79,7 @@ class ChatResponse(BaseModel):
     rewritten: dict | None
     full_doc_decision: dict | None
     plan: dict | None
+    question_id: str | None = None
 
 
 @app.get("/api/agents")
@@ -136,32 +141,18 @@ def _enforce_quota(state: dict) -> None:
     settings = admin_store.get_settings()
     limit = _daily_limit(state["user"], settings)
     if limit and admin_store.questions_today(state["user"]["sub"]) >= limit:
+        chat_log.record_refusal(state["user"]["sub"], "daily_limit")
         raise HTTPException(
             status_code=429,
             detail=f"הגעת למכסת השאלות היומית ({limit}). המכסה מתחדשת מחר.",
         )
     budget = settings["monthly_budget_usd"]
     if budget and admin_store.cost_this_month() >= budget:
+        chat_log.record_refusal(state["user"]["sub"], "monthly_budget")
         raise HTTPException(
             status_code=429,
             detail="המערכת הגיעה לתקרת השימוש החודשית. פנה למנהל המערכת.",
         )
-
-
-def _new_usage_collector() -> UsageCollector:
-    settings = admin_store.get_settings()
-    return UsageCollector(fallback_prices=(settings["price_input_per_m"], settings["price_output_per_m"]))
-
-
-def _record_chat_usage(user_id: str, usage: UsageCollector, agent_id: str | None, ok: bool) -> None:
-    try:
-        admin_store.record_usage(
-            user_sub=user_id, kind="chat", model=",".join(sorted(usage.models)) or LLM_MODEL,
-            input_tokens=usage.input_tokens, output_tokens=usage.output_tokens,
-            llm_calls=usage.llm_calls, agent_id=agent_id, ok=ok, cost_usd=usage.cost_usd,
-        )
-    except Exception:
-        pass  # usage accounting must never break an answer
 
 
 @app.post("/api/chat", response_model=ChatResponse)
@@ -175,6 +166,7 @@ async def chat(
     user_id = state["user"]["sub"]
     session_id = request.session_id or str(uuid.uuid4())
     usage, ok = _new_usage_collector(), False
+    question_id, started, result, error = uuid.uuid4().hex, time.monotonic(), None, None
     try:
         result = run_rag_pipeline(
             query=request.query,
@@ -194,11 +186,15 @@ async def chat(
             rewritten=result.get("rewritten").model_dump() if result.get("rewritten") else None,
             full_doc_decision=result.get("full_doc_decision").model_dump() if result.get("full_doc_decision") else None,
             plan=result.get("plan").model_dump() if result.get("plan") else None,
+            question_id=question_id,
         )
     except Exception as e:
+        error = str(e)
         raise HTTPException(status_code=500, detail=str(e))
     finally:
-        _record_chat_usage(user_id, usage, request.agent_id, ok)
+        _record_chat_usage(user_id, usage, request.agent_id, ok, log=dict(
+            question_id=question_id, session_id=session_id, query=request.query, filters=request.filters, result=result,
+            latency_ms=int((time.monotonic() - started) * 1000), first_token_ms=None, error=error))
 
 
 def _serialize_pydantic(obj):
@@ -218,9 +214,11 @@ def _run_stream_in_thread(
     q: Queue,
     agent_id: str | None = None,
     filters: dict | None = None,
+    question_id: str | None = None,
 ):
     """Run the sync stream_rag_pipeline in a thread and push events to a queue."""
     usage, ok = _new_usage_collector(), False
+    started, first_token_ms, result, error = time.monotonic(), None, None, None
     try:
         for event in stream_rag_pipeline(
             query=query,
@@ -231,15 +229,24 @@ def _run_stream_in_thread(
             filters=filters,
             callbacks=[usage],
         ):
+            if event["type"] == "token" and first_token_ms is None:
+                first_token_ms = int((time.monotonic() - started) * 1000)
+            elif event["type"] == "result":
+                result = event["data"]
+                event = {**event, "question_id": question_id}
             q.put(event)
         ok = True
         q.put(None)  # sentinel: done
     except Exception as e:
+        error = str(e)
         q.put({"type": "error", "error": str(e)})
         q.put(None)
     finally:
         if user_id:
-            _record_chat_usage(user_id, usage, agent_id, ok)
+            _record_chat_usage(user_id, usage, agent_id, ok, log=dict(
+                question_id=question_id, session_id=session_id, query=query, filters=filters,
+                result=result, latency_ms=int((time.monotonic() - started) * 1000),
+                first_token_ms=first_token_ms, error=error))
 
 
 @app.post("/api/chat/stream")
@@ -252,6 +259,7 @@ async def chat_stream(
     _enforce_quota(state)
     user_id = state["user"]["sub"]
     session_id = request.session_id or str(uuid.uuid4())
+    question_id = uuid.uuid4().hex
 
     async def event_generator() -> AsyncGenerator[str, None]:
         q: Queue = Queue()
@@ -268,6 +276,7 @@ async def chat_stream(
             q,
             request.agent_id,
             request.filters,
+            question_id,
         )
 
         while True:
@@ -319,6 +328,7 @@ async def chat_stream(
                     "rewritten": _serialize_pydantic(data.get("rewritten")),
                     "full_doc_decision": _serialize_pydantic(data.get("full_doc_decision")),
                     "plan": _serialize_pydantic(data.get("plan")),
+                    "question_id": event.get("question_id"),
                 }, ensure_ascii=False)
                 yield f"event: result\ndata: {result_payload}\n\n"
 

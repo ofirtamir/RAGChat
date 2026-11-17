@@ -165,10 +165,12 @@ def _ensure_keyword_index(table) -> None:
         if not any("kw" in (getattr(ix, "columns", None) or []) for ix in table.list_indices()):
             from lancedb.index import FTS
 
-            table.create_index(config=FTS(base_tokenizer="whitespace", lower_case=False, stem=False,
+            # the column is the first argument; passing it as vector_column_name
+            # made LanceDB look for a column named "l2" and no index was built
+            table.create_index("kw", config=FTS(base_tokenizer="whitespace", lower_case=False, stem=False,
                                           remove_stop_words=False, ascii_folding=False,
                                           with_position=False),
-                               vector_column_name="kw", replace=True)
+                               replace=True)
     except Exception:
         logger.exception("could not create the keyword index")
 
@@ -236,39 +238,93 @@ def chunks_for_source(agent: dict, source: str) -> list[Document]:
     return [_to_document(r) for r in sorted(rows, key=lambda r: (r["record_key"], r["chunk_index"]))]
 
 
-def search(agent: dict, query: str, filters: dict | None = None, k: int = 20) -> list[Document]:
-    """Hybrid search: semantic + lexical, same filters, fused by reciprocal rank."""
+def _hybrid(agent: dict, query: str, filters: dict | None, strict: bool = True) -> dict:
+    """Run both searches and fuse them. With strict=False a failing search is
+    reported in `errors` instead of raised (the admin search lab)."""
     from src.embeddings import embed_query
 
+    out = {"semantic": [], "keyword": [], "fused": [], "rows": {}, "errors": {}, "where": None}
     table = _table(agent)
     if table is None or not query.strip():
-        return []
-    where = build_where(agent, filters, query)
-    ranked: dict[str, dict] = {}
+        return out
+    where = out["where"] = build_where(agent, filters, query)
     scores: dict[str, float] = {}
 
-    def add(results: list[dict]) -> None:
+    def add(name: str, results: list[dict]) -> None:
         for rank, row in enumerate(results):
-            ranked.setdefault(row["id"], row)
+            out["rows"].setdefault(row["id"], row)
             scores[row["id"]] = scores.get(row["id"], 0.0) + 1.0 / (RRF_K + rank + 1)
+        out[name] = results
 
-    vq = table.search(embed_query(query), vector_column_name="vector").distance_type("cosine")
-    if where:
-        vq = vq.where(where, prefilter=True)
-    add(vq.limit(CANDIDATES).to_list())
+    try:
+        vq = table.search(embed_query(query), vector_column_name="vector").distance_type("cosine")
+        if where:
+            vq = vq.where(where, prefilter=True)
+        add("semantic", vq.limit(CANDIDATES).to_list())
+    except Exception as exc:
+        if strict:
+            raise
+        out["errors"]["semantic"] = str(exc)[:300]
 
     terms = keyword_query(query)
+    out["terms"] = terms
     if terms:
         try:
             kq = table.search(terms, query_type="fts", fts_columns="kw")
             if where:
                 kq = kq.where(where, prefilter=True)
-            add(kq.limit(CANDIDATES).to_list())
-        except Exception:
+            add("keyword", kq.limit(CANDIDATES).to_list())
+        except Exception as exc:
             logger.exception("keyword search failed; using semantic results only")
+            out["errors"]["keyword"] = str(exc)[:300]
 
-    best = sorted(scores, key=scores.get, reverse=True)[:k]
-    return [_to_document(ranked[i], scores[i]) for i in best]
+    out["fused"] = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)
+    return out
+
+
+def search(agent: dict, query: str, filters: dict | None = None, k: int = 20) -> list[Document]:
+    """Hybrid search: semantic + lexical, same filters, fused by reciprocal rank."""
+    found = _hybrid(agent, query, filters)
+    return [_to_document(found["rows"][i], score) for i, score in found["fused"][:k]]
+
+
+def search_stages(agent: dict, query: str, filters: dict | None = None, k: int = 20) -> dict:
+    """search(), with every stage laid out for the admin search lab: where each
+    chunk ranked in the semantic and keyword lists, its raw scores, and the fused order."""
+    found = _hybrid(agent, query, filters, strict=False)
+    sem_rank = {r["id"]: (i + 1, r.get("_distance")) for i, r in enumerate(found["semantic"])}
+    kw_rank = {r["id"]: (i + 1, r.get("_score")) for i, r in enumerate(found["keyword"])}
+    rows = []
+    for pos, (cid, score) in enumerate(found["fused"]):
+        row = found["rows"][cid]
+        rows.append({
+            "id": cid, "fused_rank": pos + 1, "rrf": round(score, 5), "in_top_k": pos < k,
+            "semantic_rank": sem_rank.get(cid, (None, None))[0],
+            "semantic_similarity": (1 - sem_rank[cid][1]) if cid in sem_rank and sem_rank[cid][1] is not None else None,
+            "keyword_rank": kw_rank.get(cid, (None, None))[0],
+            "keyword_score": kw_rank.get(cid, (None, None))[1],
+            **{f: row.get(f) for f in ("record_key", "source", "page", "section", "chunk_index", "text")},
+        })
+    return {"rows": rows, "errors": found["errors"], "where": found["where"],
+            "keyword_terms": found.get("terms", ""),
+            "semantic_count": len(found["semantic"]), "keyword_count": len(found["keyword"])}
+
+
+def to_documents(rows: list[dict]) -> list[Document]:
+    """search_stages rows back to Documents (for reranking in the search lab)."""
+    return [_to_document({**r, "meta": "{}"}, r.get("rrf")) for r in rows]
+
+
+def document_chunks(agent: dict, key: str) -> list[dict]:
+    """Every chunk stored for one document, in order, without vectors."""
+    if not _KEY_RE.match(key):
+        raise ValueError(f"bad record key: {key!r}")
+    table = _table(agent)
+    if table is None:
+        return []
+    rows = (table.search().where(f"record_key = {_sql_str(key)}")
+            .select(["id", "page", "section", "chunk_index", "text"]).limit(5000).to_list())
+    return sorted(rows, key=lambda r: r["chunk_index"])
 
 
 def expand_to_sections(agent: dict, docs: list[Document], max_chars: int = 3000) -> list[Document]:

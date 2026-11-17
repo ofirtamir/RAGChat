@@ -108,6 +108,8 @@ def rerank_documents(
 
         # Pair documents with scores, sort descending, take top_k
         scored = sorted(zip(documents, scores), key=lambda x: x[1], reverse=True)
+        for doc, score in scored:
+            doc.metadata["_rerank"] = score  # shown in the admin question log and search lab
         return [doc for doc, _ in scored[:top_k]]
 
     except Exception as e:

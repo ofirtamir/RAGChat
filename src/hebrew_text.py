@@ -4,7 +4,9 @@ Hebrew glues one-letter prefixes to words: "בתל אביב", "והשבחה", "�
 A keyword index over raw words would not match "תל" or "השבחה". Each word is
 indexed as itself plus the forms with up to two leading prefix letters
 removed, and queries go through the same function, so either side can carry
-the prefix. Niqqud and punctuation are dropped; numbers stay as they are, and
+the prefix. Only real prefix sequences are removed ("וה", not "הש"), and a
+short list of common words whose first letter belongs to the word ("היטל",
+"מועד") is never cut. Niqqud and punctuation are dropped; numbers stay as they are, and
 numbers joined by "/" or "-" are also indexed as their parts.
 """
 from __future__ import annotations
@@ -12,6 +14,23 @@ from __future__ import annotations
 import re
 
 _PREFIXES = set("והבלמשכ")
+# Which prefix letter may follow which: "וה", "שב", "מה", "כש"… but never "הש"
+# or "המ" ("המועד" is ה + מועד, not ה + מ + ועד). ב/ל absorb the article.
+_NEXT_PREFIX = {"ו": set("בלמשכה"), "ש": set("בלמכה"), "מ": {"ה"}, "כ": {"ש", "ה"}}
+# Common words in the decisions whose first letter is part of the word, not a
+# prefix: stripping it gives a non-word ("היטל" → "יטל") or another word
+# ("מועד" → "ועד", "שמאי" → "מאי") and only adds noise to keyword search.
+_WHOLE_WORDS = frozenset("""
+    היטל היטלי היתר היתרים הסכם הסכמה הפקעה השבחה הכרעה החלטה הערכה הקלה הקלות השגה
+    הודעה הוראה הוראות הנחה הפחתה היקף הליך הריסה התנגדות התחדשות הוצאות הגשה
+    מועד מועדים מגרש מגרשים מבנה מבנים מקרקעין משרד משרדים מחיר מחירים מכירה מימוש
+    מקדם מקדמי מדד מתחם מגורים מסחר מבקש מבקשת משיבה מכר מלא
+    שמאי שמאית שמאים שומה שומות שווי שטח שטחי שימוש
+    בניה בנייה ביטול בית בנין בניין
+    לוח כלל
+""".split())
+# Never emitted as a variant: function words that would match nearly every chunk.
+_NOT_VARIANTS = frozenset("לא עד ועד על אם כי את גם כל מה או יש זה זו פי".split())
 _NIQQUD = re.compile(r"[֑-ׇ]")
 _TOKEN = re.compile(r"[א-ת]+(?:[\"'״׳][א-ת]+)*|[A-Za-z]+|\d+(?:[.,/\-]\d+)*")
 _MIN_STEM = 2
@@ -25,13 +44,14 @@ def _variants(word: str) -> list[str]:
         if len(parts) > 1:
             out += [p for p in parts if p]
         return out
-    stem = word
+    stem, allowed = word, _PREFIXES
     for _ in range(2):
-        if len(stem) - 1 >= _MIN_STEM and stem[0] in _PREFIXES:
-            stem = stem[1:]
-            out.append(stem)
-        else:
+        if stem in _WHOLE_WORDS or len(stem) - 1 < _MIN_STEM or stem[0] not in allowed:
             break
+        allowed = _NEXT_PREFIX.get(stem[0], set())
+        stem = stem[1:]
+        if stem not in _NOT_VARIANTS:
+            out.append(stem)
     return out
 
 

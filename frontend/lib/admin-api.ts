@@ -8,9 +8,9 @@ const BACKEND_ORIGIN =
   (typeof process !== "undefined" && process.env.NEXT_PUBLIC_BACKEND_ORIGIN) ||
   "http://localhost:8000"
 
-const API_BASE = `${BACKEND_ORIGIN}/api`
+export const API_BASE = `${BACKEND_ORIGIN}/api`
 
-async function call<T>(path: string, token: string | undefined, init?: RequestInit): Promise<T> {
+export async function call<T>(path: string, token: string | undefined, init?: RequestInit): Promise<T> {
   const headers: Record<string, string> = { ...(init?.headers as Record<string, string>) }
   if (init?.body) headers["Content-Type"] = "application/json"
   // authFetch attaches the token and handles an expired sign-in (one retry
