@@ -67,16 +67,31 @@ def _get_llm() -> ChatGoogleGenerativeAI:
     return answer_llm()
 
 
-def _format_docs(docs: list[Document]) -> str:
+def _format_docs(docs: list[Document], numbers: list[int] | None = None) -> str:
+    """Context blocks labelled [n]. `numbers` gives each block its position in the
+    full document list, which is what the UI's citations follow."""
     if not docs:
         return "No relevant documents found."
     formatted = []
-    for i, doc in enumerate(docs, 1):
+    for i, doc in zip(numbers or range(1, len(docs) + 1), docs):
         source = doc.metadata.get("source", "unknown")
         page = doc.metadata.get("page", "")
         page_str = f" (page {page + 1})" if page != "" else ""
         formatted.append(f"[{i}] Source: {source}{page_str}\n{doc.page_content}")
     return "\n\n---\n\n".join(formatted)
+
+
+def _sub_query_context(sub_queries: list[str], docs: list[Document]) -> str:
+    """One context section per sub-query. Each passage keeps its number in `docs`
+    (the citation list), so [3] in the answer is the third citation whichever
+    section it appeared in."""
+    number = {id(d): i for i, d in enumerate(docs, 1)}
+    sections = []
+    for sq in sub_queries:
+        sq_docs = [d for d in docs if d.metadata.get("_sub_query") == sq]
+        sections.append(f"Sub-query: {sq}\nRetrieved context:\n"
+                        f"{_format_docs(sq_docs, [number[id(d)] for d in sq_docs])}")
+    return "\n\n===\n\n".join(sections)
 
 
 def _extract_sources(docs: list[Document]) -> list[str]:
@@ -440,12 +455,7 @@ def generator_node(state: GraphState) -> dict:
             answer = chain.invoke({"context": context, "query": query, "chat_history": history})
 
         else:
-            sub_results = []
-            for sq in plan.sub_queries:
-                sq_docs = [d for d in docs if d.metadata.get("_sub_query") == sq]
-                sub_results.append(f"Sub-query: {sq}\nRetrieved context:\n{_format_docs(sq_docs)}")
-
-            combined = "\n\n===\n\n".join(sub_results)
+            combined = _sub_query_context(plan.sub_queries, docs)
 
             system_prompt = load_prompt("synthesis-system", fallback=SYNTHESIS_SYSTEM_PROMPT)
             prompt = ChatPromptTemplate.from_messages([
@@ -709,11 +719,7 @@ def _build_llm_chain(state: dict, node_name: str):
         return chain, {"context": context, "query": query, "chat_history": history}
 
     else:
-        sub_results = []
-        for sq in plan.sub_queries:
-            sq_docs = [d for d in docs if d.metadata.get("_sub_query") == sq]
-            sub_results.append(f"Sub-query: {sq}\nRetrieved context:\n{_format_docs(sq_docs)}")
-        combined = "\n\n===\n\n".join(sub_results)
+        combined = _sub_query_context(plan.sub_queries, docs)
         system_prompt = load_prompt("synthesis-system", fallback=SYNTHESIS_SYSTEM_PROMPT)
         prompt = ChatPromptTemplate.from_messages([
             ("system", system_prompt),

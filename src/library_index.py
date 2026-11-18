@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 _queue: "queue.Queue[tuple[str, str]]" = queue.Queue()
 _thread: threading.Thread | None = None
 _thread_lock = threading.Lock()
+MAINTAIN_EVERY = 200     # documents indexed online between index maintenance runs
 
 
 def document_meta(agent: dict, doc: dict) -> dict:
@@ -89,10 +90,28 @@ def friendly_error(exc: Exception | str) -> str:
     return f"האינדוקס נכשל: {text}"[:400]
 
 
+def mark_failed(agent_id: str, key: str, exc: Exception | str) -> None:
+    """Record a failed indexing attempt. The parsed Markdown is kept, so it can
+    be retried. If an earlier version of the document is still in the index, it
+    keeps serving search, so the document stays 'indexed' (with the error shown)
+    — otherwise its chunks would be searchable while the console says 'parsed'
+    and could not be removed from there."""
+    from src.agents import get_agent
+
+    try:
+        agent = get_agent(agent_id)
+        still_indexed = agent is not None and hybrid_index.has_document(agent, key)
+    except Exception:
+        logger.exception("could not check the index for %s", key)
+        still_indexed = False
+    message = friendly_error(exc)
+    if still_indexed:
+        message = f"{message} (בחיפוש מופיעה הגרסה הקודמת של המסמך)"[:400]
+    library_store.set_status(agent_id, key, "indexed" if still_indexed else "parsed", error=message)
+
+
 def process(agent_id: str, key: str) -> None:
-    """Index one document and record the outcome. A failure keeps the parsed
-    Markdown, so the document returns to 'parsed' with the error shown and
-    indexing can simply be retried."""
+    """Index one document and record the outcome (see mark_failed for failures)."""
     from src.agents import get_agent
 
     try:
@@ -102,10 +121,27 @@ def process(agent_id: str, key: str) -> None:
         index_document(agent, key)
     except Exception as exc:
         logger.exception("indexing failed for %s/%s", agent_id, key)
-        library_store.set_status(agent_id, key, "parsed", error=friendly_error(exc))
+        mark_failed(agent_id, key, exc)
+
+
+def _maintain(agent_ids: set[str]) -> None:
+    from src.agents import get_agent
+
+    for agent_id in agent_ids:
+        try:
+            agent = get_agent(agent_id)
+            if agent is not None:
+                hybrid_index.maintain(agent)
+        except Exception:
+            logger.exception("index maintenance failed for %s", agent_id)
 
 
 def _run() -> None:
+    """Index queued documents one by one. When the queue drains (or every
+    MAINTAIN_EVERY documents in a long run) the touched indexes are maintained:
+    without it new rows pile up as small files outside the keyword index, and
+    the vector index is never built."""
+    touched, since = set(), 0
     while True:
         agent_id, key = _queue.get()
         try:
@@ -114,6 +150,11 @@ def _run() -> None:
             logger.exception("indexer crashed on %s/%s", agent_id, key)
         finally:
             _queue.task_done()
+        touched.add(agent_id)
+        since += 1
+        if _queue.empty() or since >= MAINTAIN_EVERY:
+            _maintain(touched)
+            touched, since = set(), 0
 
 
 def enqueue(agent_id: str, keys: list[str]) -> None:
@@ -141,7 +182,12 @@ def resume_interrupted() -> None:
 
     waiting = library_batch.resume()
     for agent in list_agents():
-        stuck = library_store.search(agent, status="indexing", page_size=200)["documents"]
-        keys = [d["record_key"] for d in stuck if d["record_key"] not in waiting]
+        keys, page = [], 1
+        while True:      # every page: a large interrupted load must resume whole
+            found = library_store.search(agent, status="indexing", page=page, page_size=200)
+            keys += [d["record_key"] for d in found["documents"] if d["record_key"] not in waiting]
+            if page * found["page_size"] >= found["total"]:
+                break
+            page += 1
         if keys:
             enqueue(agent["id"], keys)

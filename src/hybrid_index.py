@@ -176,8 +176,9 @@ def _ensure_keyword_index(table) -> None:
 
 
 def maintain(agent: dict) -> None:
-    """After large loads: compact files, refresh indexes, and build the vector
-    index once the table is big enough that a flat scan gets slow."""
+    """Compact files, fold new rows into the keyword index, and build the vector
+    index once the table is big enough that a flat scan gets slow. Runs after a
+    Batch job and whenever the online indexing queue drains (src/library_index)."""
     table = _table(agent)
     if table is None:
         return
@@ -209,8 +210,25 @@ def record_keys(agent: dict) -> set[str]:
     return set(_scan(table, ["record_key"]).column("record_key").to_pylist())
 
 
+def has_document(agent: dict, key: str) -> bool:
+    """Whether any chunk of this document is in the index (served by search)."""
+    if not _KEY_RE.match(key):
+        return False
+    table = _table(agent)
+    return table is not None and table.count_rows(f"record_key = {_sql_str(key)}") > 0
+
+
 def sources(agent: dict, limit: int = 200) -> list[str] | None:
-    """Distinct document titles, or None when there are more than `limit` documents."""
+    """Distinct document titles, or None when there are more than `limit` documents.
+    Called on every question: a large library is recognised from the document
+    counts, without reading every row of the index."""
+    from src import library_store
+
+    try:
+        if library_store.status_counts(agent["id"])["counts"].get("indexed", 0) > limit:
+            return None
+    except Exception:
+        logger.exception("document counts unavailable; reading the index instead")
     table = _table(agent)
     if table is None:
         return []
