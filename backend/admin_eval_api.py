@@ -100,6 +100,7 @@ class BuildRequest(BaseModel):
     n: int = Field(default=60, ge=MIN_BUILD, le=MAX_BUILD)
     seed: int = Field(default=7, ge=0, le=1_000_000)
     meta_share: float = Field(default=0.4, ge=0, le=1)
+    mode: Literal["decisions", "chunks"] = "chunks"
     confirm: bool = False
 
 
@@ -109,16 +110,17 @@ def build_set(req: BuildRequest):
     confirm: start writing the set in the background (paid)."""
     agent = _agent(req.agent_id)
     try:
-        estimate = eval_jobs.estimate_build(agent, req.n, req.seed, req.meta_share)
+        estimate = eval_jobs.estimate_build(agent, req.n, req.seed, req.meta_share, req.mode)
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"דגימת האינדקס נכשלה: {str(exc)[:200]}")
     if not estimate["sampled"]:
         raise HTTPException(status_code=400, detail="האינדקס ריק — אין קטעים לכתוב מהם שאלות")
     if not req.confirm:
         return {"estimate": estimate, "budget": eval_store.budget()}
-    name = req.name.strip() or f"סינתטי {estimate['sampled']} החלטות"
+    name = req.name.strip() or (f"שאלות בסגנון שמאים, {req.n}" if req.mode == "decisions"
+                                else f"סינתטי {estimate['sampled']} החלטות")
     try:
-        qset = eval_jobs.start_build(agent, name, req.n, req.seed, req.meta_share, estimate["cost_usd"])
+        qset = eval_jobs.start_build(agent, name, req.n, req.seed, req.meta_share, estimate["cost_usd"], req.mode)
     except eval_jobs.JobBusy as exc:
         raise _busy(exc)
     except eval_jobs.BudgetExceeded as exc:
@@ -199,15 +201,20 @@ class QuestionPatch(BaseModel):
     gold: list[str] | None = Field(default=None, max_length=20)
     gold_section: str | None = Field(default=None, max_length=200)
     type: str | None = Field(default=None, max_length=40)
+    verified: Literal["correct", "wrong", "unchecked"] | None = None
 
 
 @router.patch("/questions/{question_id}")
 def patch_question(question_id: str, patch: QuestionPatch):
-    """Set or clear (gold=[]) the gold decision(s), the gold section or the type."""
+    """Set or clear (gold=[]) the gold decision(s), the gold section or the type, or
+    record a person's check of the stored answer."""
     question = _question(question_id)
     agent_id = _set(question["set_id"])["agent_id"]
     gold = _check_gold(agent_id, patch.gold) if patch.gold is not None else None
-    updated = eval_store.update_question(question_id, gold=gold, gold_section=patch.gold_section, qtype=patch.type)
+    updated = eval_store.update_question(
+        question_id, gold=gold, gold_section=patch.gold_section, qtype=patch.type,
+        verified={"correct": True, "wrong": False}.get(patch.verified or ""),
+        clear_verified=patch.verified == "unchecked")
     return _with_titles(agent_id, [{**updated, "result": None}])[0]
 
 

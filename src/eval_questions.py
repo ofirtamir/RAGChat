@@ -145,15 +145,15 @@ def plan(chunks: list[dict], n: int, meta_share: float = META_SHARE, seed: int =
             "output_tokens": n_llm * OUT_TOKENS_PER_QUESTION, "cost_usd": round(cost, 4)}
 
 
-def ask_gemini(prompt: str) -> tuple[dict, float]:
-    """One question from the model: (parsed JSON answer, cost in USD)."""
+def ask_gemini(prompt: str, max_tokens: int = 400) -> tuple[dict, float]:
+    """One JSON answer from the model: (parsed answer, cost in USD)."""
     from google.genai import types
     from src.embeddings import genai_client
 
     resp = genai_client().models.generate_content(
         model=QUESTION_MODEL, contents=prompt,
         config=types.GenerateContentConfig(
-            temperature=0, max_output_tokens=400, response_mime_type="application/json",
+            temperature=0, max_output_tokens=max_tokens, response_mime_type="application/json",
             thinking_config=types.ThinkingConfig(thinking_level="minimal")))
     usage = resp.usage_metadata
     p_in, p_out = price(QUESTION_MODEL)

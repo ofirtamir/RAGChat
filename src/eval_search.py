@@ -222,6 +222,33 @@ def sample_chunks(agent: dict, n: int, seed: int | None, min_chars: int = 300,
     return chunks
 
 
+def sample_decisions(agent: dict, n: int, seed: int | None,
+                     keys: list[tuple[str, str]] | None = None) -> list[dict]:
+    """Random indexed decisions with their whole parsed text, to write questions
+    from: [{record_key, title, meta, text}] (decisions without stored text skipped)."""
+    from src import library_store
+
+    indexed = sorted({key for _, key in (index_keys(agent) if keys is None else keys) if key})
+    out = []
+    for key in random.Random(seed).sample(indexed, min(n, len(indexed))):
+        doc = library_store.get_document(agent["id"], key)
+        pages = (doc or {}).get("parsed_pages") or []
+        text = "\n\n".join(p.get("markdown") or "" for p in pages).strip()
+        if doc and text:
+            out.append({"record_key": key, "title": doc.get("title") or "", "meta": doc.get("meta") or {},
+                        "text": text})
+    return out
+
+
+def topic_rows(agent: dict, patterns: list[str], limit: int = 20_000) -> list[dict]:
+    """Index chunks whose text contains any of the patterns: [{record_key, text, meta}]."""
+    table = hybrid_index._table(agent)
+    if table is None or not patterns:
+        return []
+    where = " OR ".join("text LIKE '%" + p.replace("'", "''") + "%'" for p in patterns)
+    return table.search().where(where).select(["record_key", "text", "meta"]).limit(limit).to_list()
+
+
 # ── real questions ───────────────────────────────────────────────────────
 
 def real_questions(days: int = 90, limit: int = 500, with_id: bool = False) -> list[dict]:

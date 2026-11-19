@@ -11,7 +11,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
-from src import eval_questions as eq, eval_search, eval_store, retrieval_eval as rev
+from src import eval_decisions as ed, eval_questions as eq, eval_search, eval_store, retrieval_eval as rev
 
 logger = logging.getLogger(__name__)
 
@@ -104,38 +104,56 @@ def _usd(value: float) -> str:
 
 # ── build ────────────────────────────────────────────────────────────────
 
-def _plan(agent: dict, n: int, seed: int, meta_share: float) -> dict:
+BUILD_MODES = ("decisions", "chunks")
+
+
+def _plan(agent: dict, n: int, seed: int, meta_share: float, mode: str = "chunks") -> dict:
+    """decisions: questions written from whole decisions, appraiser style (src/eval_decisions.py).
+    chunks: one question per sampled chunk (the first builder)."""
+    if mode == "decisions":
+        want = ed.counts(n)
+        n_docs = want["named"] + want["block_plot"] + int(max(want["fact"] / ed.FACTS_PER_DOC, want["analysis"])
+                                                          * eq.SPARE) + 2
+        planned = ed.plan(eval_search.sample_decisions(agent, n_docs, seed), n, seed)
+        return {**planned, "meta_items": planned["free_items"],
+                "n_llm": n - len(planned["free_items"])}
     chunks = eval_search.sample_chunks(agent, int(n * eq.SPARE) + 2, seed)
     return eq.plan(chunks, n, meta_share, seed)
 
 
-def estimate_build(agent: dict, n: int, seed: int = 7, meta_share: float = eq.META_SHARE) -> dict:
+def estimate_build(agent: dict, n: int, seed: int = 7, meta_share: float = eq.META_SHARE,
+                   mode: str = "chunks") -> dict:
     """What a build would make and cost. Reads the index only; spends nothing."""
-    planned = _plan(agent, n, seed, meta_share)
-    return {"n": n, "seed": seed, "meta_share": meta_share, "sampled": planned["sampled"],
+    planned = _plan(agent, n, seed, meta_share, mode)
+    return {"n": n, "seed": seed, "meta_share": meta_share, "mode": mode, "sampled": planned["sampled"],
             "meta_questions": len(planned["meta_items"]), "llm_questions": planned["n_llm"],
             "model": planned["model"], "input_tokens": planned["input_tokens"],
             "output_tokens": planned["output_tokens"], "cost_usd": planned["cost_usd"]}
 
 
 def start_build(agent: dict, name: str, n: int, seed: int = 7, meta_share: float = eq.META_SHARE,
-                estimate_usd: float = 0.0) -> dict:
-    """Create a set and fill it in the background (paid: the model writes ~60% of it)."""
+                estimate_usd: float = 0.0, mode: str = "chunks") -> dict:
+    """Create a set and fill it in the background (paid: the model writes most of it)."""
+    if mode not in BUILD_MODES:
+        raise ValueError(f"bad build mode: {mode}")
     if status()["running"]:
         raise JobBusy("עבודה אחרת כבר רצה — המתן שתסתיים")
     remaining = check_budget(estimate_usd)["remaining_usd"]
     qset = eval_store.create_set(agent["id"], name, "synthetic", status="building",
-                                 info={"n": n, "seed": seed, "meta_share": meta_share, "model": eq.QUESTION_MODEL})
+                                 info={"n": n, "seed": seed, "meta_share": meta_share, "mode": mode,
+                                       "model": eq.QUESTION_MODEL})
     try:
-        _start("build", _build, (agent, qset["id"], n, seed, meta_share, remaining), agent_id=agent["id"],
-               set_id=qset["id"], label=qset["name"], total=n, message="דוגם קטעים מהאינדקס")
+        _start("build", _build, (agent, qset["id"], n, seed, meta_share, remaining, mode), agent_id=agent["id"],
+               set_id=qset["id"], label=qset["name"], total=n,
+               message="דוגם החלטות מהאינדקס" if mode == "decisions" else "דוגם קטעים מהאינדקס")
     except JobBusy:
         eval_store.delete_set(qset["id"])
         raise
     return qset
 
 
-def _build(agent: dict, set_id: str, n: int, seed: int, meta_share: float, remaining: float) -> None:
+def _build(agent: dict, set_id: str, n: int, seed: int, meta_share: float, remaining: float,
+           mode: str = "chunks") -> None:
     spent = {"usd": 0.0, "over": False}
 
     def should_stop(so_far: float) -> bool:
@@ -144,7 +162,7 @@ def _build(agent: dict, set_id: str, n: int, seed: int, meta_share: float, remai
         return _stop.is_set() or spent["over"]
 
     try:
-        planned = _plan(agent, n, seed, meta_share)
+        planned = _plan(agent, n, seed, meta_share, mode)
         eval_store.add_questions(set_id, planned["meta_items"], "synthetic")
         made = len(planned["meta_items"])
         _update(done=made, total=made + planned["n_llm"], message=f"כותב שאלות עם {planned['model']}")
@@ -155,7 +173,11 @@ def _build(agent: dict, set_id: str, n: int, seed: int, meta_share: float, remai
                 _state["done"] += 1
                 _state["spent_usd"] = round(so_far, 4)
 
-        written = eq.write_questions(planned, on_item=on_item, should_stop=should_stop)
+        if mode == "decisions":
+            written = ed.write(planned, topic_rows=lambda t: eval_search.topic_rows(agent, t["patterns"]),
+                               on_item=on_item, should_stop=should_stop)
+        else:
+            written = eq.write_questions(planned, on_item=on_item, should_stop=should_stop)
         spent["usd"] = written["spent"]
     except Exception as exc:
         eval_store.update_set(set_id, status="failed", info={"error": str(exc)[:300], "cost_usd": spent["usd"]})

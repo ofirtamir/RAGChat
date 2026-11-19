@@ -19,7 +19,8 @@ export const HEADLINE: { id: MetricName; label: string; hint: string; kind: "rat
 export const METRIC_LABEL: Partial<Record<MetricName | "n", string>> = {
   n: "שאלות",
   "recall@5": "Recall@5", "recall@10": "Recall@10", "recall@20": "Recall@20", "mrr@20": "MRR",
-  "hit@1": "Hit@1", "section_hit@10": "הסעיף הנכון ב-10", "distinct@10": "החלטות שונות ב-10",
+  "hit@1": "Hit@1", "precision@10": "דיוק ב-10 (שאלות נושא)", "section_hit@10": "הסעיף הנכון ב-10",
+  "distinct@10": "החלטות שונות ב-10",
   "filter_acc@10": "דיוק סינון", "vector_recall@20": "Recall@20 משמעות בלבד",
   "keyword_recall@20": "Recall@20 מילים בלבד", "candidate_recall@20": "Recall@20 לפני דירוג",
 }
@@ -29,6 +30,10 @@ export const TYPE_LABEL: Record<string, string> = {
   table: "נתון מטבלה",
   block_plot: "גוש/חלקה",
   metadata: "חיפוש לפי פרטים",
+  named: "החלטה לפי שם",
+  fact: "פרט מהחלטה",
+  analysis: "ניתוח החלטה",
+  topic: "נושא במאגר",
   real: "שאלה אמיתית",
   manual: "ידנית",
   all: "הכל",

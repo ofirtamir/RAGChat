@@ -111,6 +111,10 @@ def _init_db() -> None:
             );
             """
         )
+        have = {row[1] for row in conn.execute("PRAGMA table_info(eval_questions)")}
+        for column, ddl in (("answer", "TEXT"), ("verified", "INTEGER")):  # added with the decisions build
+            if column not in have:
+                conn.execute(f"ALTER TABLE eval_questions ADD COLUMN {column} {ddl}")
 
 
 _init_db()
@@ -215,21 +219,23 @@ def add_questions(set_id: str, items: list[dict], source: str) -> int:
                 continue
             cur = conn.execute(
                 "INSERT OR IGNORE INTO eval_questions (id, set_id, question, type, gold, gold_section, "
-                "expected_meta, source, origin, record_key, chunk_id, log_id, asked_at, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "expected_meta, source, origin, record_key, chunk_id, log_id, asked_at, created_at, answer) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (_new_id(), set_id, text, item.get("type") or source, _dumps([g for g in item.get("gold") or [] if g]),
                  item.get("gold_section") or None, _dumps(item.get("expected_meta") or {}), source,
                  item.get("origin"), item.get("record_key"), item.get("chunk_id"), item.get("log_id"),
-                 item.get("asked_at"), now))
+                 item.get("asked_at"), now, _dumps(item["answer"]) if item.get("answer") else None))
             added += cur.rowcount
         conn.commit()
     return added
 
 
-def _question_row(row: sqlite3.Row) -> dict:
+def _question_row(row: sqlite3.Row | dict) -> dict:
     out = dict(row)
     out["gold"] = _loads(out["gold"], [])
     out["expected_meta"] = _loads(out["expected_meta"], {})
+    out["answer"] = _loads(out.get("answer"), None)
+    out["verified"] = None if out.get("verified") is None else bool(out["verified"])
     return out
 
 
@@ -240,9 +246,14 @@ def get_question(question_id: str) -> dict | None:
 
 
 def update_question(question_id: str, gold: list[str] | None = None, gold_section: str | None = None,
-                    qtype: str | None = None) -> dict | None:
-    """Set the gold decision(s) (an empty list clears them), gold section or type."""
+                    qtype: str | None = None, verified: bool | None = None,
+                    clear_verified: bool = False) -> dict | None:
+    """Set the gold decision(s) (an empty list clears them), gold section, type, or
+    whether a person checked the stored answer (True = correct, False = wrong)."""
     sets, params = [], []
+    if verified is not None or clear_verified:
+        sets.append("verified = ?")
+        params.append(None if clear_verified else int(verified))
     if gold is not None:
         sets.append("gold = ?")
         params.append(_dumps(list(dict.fromkeys(g for g in gold if g))))
@@ -318,9 +329,7 @@ def list_questions(set_id: str, qtype: str | None = None, source: str | None = N
             (*join_params, *params, page_size, (page - 1) * page_size)).fetchall()
     out = []
     for row in rows:
-        item = {k: v for k, v in dict(row).items() if not k.startswith("r_")}
-        item["gold"] = _loads(item["gold"], [])
-        item["expected_meta"] = _loads(item["expected_meta"], {})
+        item = _question_row({k: v for k, v in dict(row).items() if not k.startswith("r_")})
         item["result"] = None if not row["r_run"] else {
             "found_rank": row["r_found"], "metrics": _loads(row["r_metrics"], {}), "top": _loads(row["r_top"], []),
             "error": row["r_error"], "search_queries": _loads(row["r_queries"], None)}
