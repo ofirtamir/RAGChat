@@ -185,7 +185,8 @@ def _ensure_keyword_index(table) -> None:
 def maintain(agent: dict) -> None:
     """Compact files, fold new rows into the keyword index, and build the vector
     index once the table is big enough that a flat scan gets slow. Runs after a
-    Batch job and whenever the online indexing queue drains (src/library_index)."""
+    Batch job, and after online indexing goes quiet or every few hundred documents
+    (src/library_index)."""
     table = _table(agent)
     if table is None:
         return

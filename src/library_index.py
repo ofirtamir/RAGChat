@@ -25,6 +25,7 @@ _queue: "queue.Queue[tuple[str, str]]" = queue.Queue()
 _thread: threading.Thread | None = None
 _thread_lock = threading.Lock()
 MAINTAIN_EVERY = 200     # documents indexed online between index maintenance runs
+MAINTAIN_AFTER_IDLE = 120  # seconds with an empty queue before maintenance runs
 
 
 def document_meta(agent: dict, doc: dict) -> dict:
@@ -136,23 +137,33 @@ def _maintain(agent_ids: set[str]) -> None:
             logger.exception("index maintenance failed for %s", agent_id)
 
 
-def _run() -> None:
-    """Index queued documents one by one. When the queue drains (or every
-    MAINTAIN_EVERY documents in a long run) the touched indexes are maintained:
-    without it new rows pile up as small files outside the keyword index, and
-    the vector index is never built."""
+def _run(jobs: "queue.Queue[tuple[str, str]] | None" = None) -> None:
+    """Index queued documents one by one, and maintain the touched indexes every
+    MAINTAIN_EVERY documents or once the queue has stayed empty for
+    MAINTAIN_AFTER_IDLE seconds: without it new rows pile up as small files
+    outside the keyword index, and the vector index is never built.
+
+    Maintenance rewrites the whole table. The indexing machine sends documents
+    one at a time, so maintaining whenever the queue drained meant a rewrite
+    after almost every document. Rows not yet maintained are still searched."""
+    jobs = jobs or _queue
     touched, since = set(), 0
     while True:
-        agent_id, key = _queue.get()
+        try:
+            agent_id, key = jobs.get(timeout=MAINTAIN_AFTER_IDLE if touched else None)
+        except queue.Empty:
+            _maintain(touched)
+            touched, since = set(), 0
+            continue
         try:
             process(agent_id, key)
         except Exception:  # keep the indexer thread alive whatever one document does
             logger.exception("indexer crashed on %s/%s", agent_id, key)
         finally:
-            _queue.task_done()
+            jobs.task_done()
         touched.add(agent_id)
         since += 1
-        if _queue.empty() or since >= MAINTAIN_EVERY:
+        if since >= MAINTAIN_EVERY:
             _maintain(touched)
             touched, since = set(), 0
 
