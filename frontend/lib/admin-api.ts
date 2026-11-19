@@ -47,6 +47,7 @@ export interface AdminSettings {
   price_output_per_m: number
   price_embedding_per_m: number
   price_embedding_batch_per_m: number
+  eval_budget_usd: number
 }
 
 export interface UsageDay {

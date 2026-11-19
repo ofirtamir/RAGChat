@@ -31,6 +31,7 @@ DEFAULT_SETTINGS = {
     "price_output_per_m": 1.50,    # USD per 1M output tokens (incl. thinking), same fallback
     "price_embedding_per_m": 0.15, # USD per 1M embedded tokens (immediate)
     "price_embedding_batch_per_m": 0.075,  # USD per 1M embedded tokens via the Batch API
+    "eval_budget_usd": 1.0,        # total the retrieval benchmark may spend (building sets, runs)
 }
 
 

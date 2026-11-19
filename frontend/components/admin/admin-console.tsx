@@ -3,11 +3,12 @@
 import { useEffect, useState } from "react"
 import Link from "next/link"
 import { signOut, useSession } from "next-auth/react"
-import { ArrowRight, BarChart3, FileText, LayoutDashboard, ScanSearch, Settings, ThumbsUp, Users } from "lucide-react"
+import { ArrowRight, BarChart3, FileText, Gauge, LayoutDashboard, ScanSearch, Settings, ThumbsUp, Users } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { ThemeToggle } from "@/components/theme-toggle"
 import { getMe, Me } from "@/lib/admin-api"
 import { cn } from "@/lib/utils"
+import { BenchmarkTab } from "./benchmark-tab"
 import { LibraryTab } from "./library-tab"
 import { OverviewTab } from "./overview-tab"
 import { QualityTab } from "./quality-tab"
@@ -21,6 +22,7 @@ const TABS = [
   { id: "library", label: "מסמכים", icon: FileText },
   { id: "quality", label: "איכות תשובות", icon: ThumbsUp },
   { id: "search", label: "בדיקת חיפוש", icon: ScanSearch },
+  { id: "benchmark", label: "בנצ׳מרק", icon: Gauge },
   { id: "users", label: "משתמשים", icon: Users },
   { id: "usage", label: "שימוש ועלויות", icon: BarChart3 },
   { id: "settings", label: "הגדרות", icon: Settings },
@@ -106,6 +108,7 @@ export function AdminShell({ token }: { token: string | undefined }) {
         {tab === "library" && <LibraryTab token={token} />}
         {tab === "quality" && <QualityTab token={token} />}
         {tab === "search" && <SearchLabTab token={token} />}
+        {tab === "benchmark" && <BenchmarkTab token={token} />}
         {tab === "users" && <UsersTab token={token} />}
         {tab === "usage" && <UsageTab token={token} />}
         {tab === "settings" && <SettingsTab token={token} />}
