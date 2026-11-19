@@ -25,9 +25,10 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.graph import run_rag_pipeline, stream_rag_pipeline
 from src.observability import initialize_langfuse
-from src import admin_store, chat_log, library_index, sessions_store
+from src import admin_store, chat_log, eval_store, library_index, sessions_store
 from src.chat_log import new_usage_collector as _new_usage_collector, record_chat as _record_chat_usage
 from .admin_api import admin as admin_router, worker as worker_router
+from .admin_eval_api import router as admin_eval_router
 from .admin_insights_api import router as admin_insights_router
 from .eval_api import router as eval_router
 from .feedback_api import router as feedback_router
@@ -56,8 +57,10 @@ app.include_router(admin_router)
 app.include_router(worker_router)
 app.include_router(admin_insights_router)
 app.include_router(eval_router)
+app.include_router(admin_eval_router)
 app.include_router(feedback_router)
 library_index.resume_interrupted()
+eval_store.fail_interrupted()  # a benchmark job running when the server stopped is gone
 
 # Size the pool based on available CPUs.  Each streaming request blocks a
 # thread for the duration of the LLM call (I/O-bound), so we allow several

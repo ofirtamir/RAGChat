@@ -3,14 +3,15 @@
 Runs on the owner's PC against the production server (the index lives only
 there) through the worker endpoints /api/worker/eval/*. Question sets, real
 user questions and run reports are kept under DATA_DIR/eval/ — never in the
-repository, which is public.
+repository, which is public. (The admin console's "בנצ'מרק" tab runs the same
+logic on the server and keeps its sets and runs in the server's database.)
 
 Setup: the same .env entries as scripts/index_worker.py (WORKER_API_URL,
 WORKER_API_KEY); `build` also needs GOOGLE_API_KEY.
 
 Usage:
-    python scripts/eval_retrieval.py build --n 300            sample + show the cost (spends nothing)
-    python scripts/eval_retrieval.py build --n 300 --yes      ...and write the questions (paid, cheap model)
+    python scripts/eval_retrieval.py build --n 60             sample + show the cost (spends nothing)
+    python scripts/eval_retrieval.py build --n 60 --yes       ...and write the questions (paid, cheap model)
     python scripts/eval_retrieval.py import-real              real questions -> sets/real.json, to label by hand
     python scripts/eval_retrieval.py run --mode hybrid --label baseline          free
     python scripts/eval_retrieval.py run --mode pipeline --label baseline --yes  paid (server-side Gemini)
@@ -25,7 +26,6 @@ import argparse
 import hashlib
 import json
 import os
-import random
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -39,36 +39,14 @@ from dotenv import load_dotenv  # noqa: E402
 
 load_dotenv(ROOT / ".env")
 
-from config import DATA_DIR, LLM_MODEL_FAST, MODEL_PRICES  # noqa: E402
-from src import retrieval_eval as rev  # noqa: E402
+from config import DATA_DIR, LLM_MODEL_FAST  # noqa: E402
+from src import eval_questions as eq, retrieval_eval as rev  # noqa: E402
 
 DEFAULT_AGENT = "decisive_appraisal_decisions"
 EVAL_DIR = DATA_DIR / "eval"
 SETS_DIR, RUNS_DIR = EVAL_DIR / "sets", EVAL_DIR / "runs"
-QUESTION_MODEL = os.getenv("EVAL_QUESTION_MODEL", "gemini-3.1-flash-lite")
-CHARS_PER_TOKEN = 1.6          # Hebrew, measured on the corpus (src/embeddings.py)
-OUT_TOKENS_PER_QUESTION = 150  # JSON answer plus minimal thinking
-MAX_COPIED_WORDS = 6           # a longer run copied from the chunk drops the question
 SAMPLE_BATCH = 200             # server cap per /sample call
 BATCH = {"hybrid": 25, "pipeline": 5}
-
-QUESTION_PROMPT = """אתה שמאי מקרקעין מוסמך שמחפש במאגר החלטות של שמאים מכריעים.
-לפניך קטע מתוך החלטה אחת. כתוב שאלה אחת, טבעית, בעברית, כפי ששמאי היה מקליד בחיפוש, שהקטע הזה עונה עליה.
-- {focus}
-- נסח במילים שלך. אל תעתיק מהקטע רצף של יותר מארבע מילים.
-- השאלה צריכה להיות ממוקדת מספיק כדי שהקטע הזה יהיה תשובה טובה לה. אפשר לציין עיר או סוג שומה אם זה טבעי, \
-אבל לא את כותרת ההחלטה, מספר התיק או שמות הצדדים.
-- אם הקטע אינו עונה על שאלה מקצועית (כותרת, חתימה, תוכן עניינים, רשימת נספחים) החזר answerable=false.
-החזר JSON בלבד: {{"answerable": true, "question": "..."}}
-
-פרטי ההחלטה: {details}
-הקטע:
-{text}"""
-FOCUS = {
-    "table": "בקטע יש טבלה או נתונים מספריים: שאל על נתון, מקדם, שיעור, מחיר למ\"ר או סכום שמופיע בו, "
-             "בלי לכתוב בשאלה את המספר שהוא התשובה.",
-    "principle": "שאל על עיקרון, כלל משפטי, שיטת שומה או הכרעה עקרונית שהקטע מסביר.",
-}
 
 
 class Server:
@@ -110,11 +88,6 @@ def set_path(name: str) -> Path:
     return path if path.suffix == ".json" and path.exists() else SETS_DIR / f"{name}.json"
 
 
-def price(model: str) -> tuple[float, float]:
-    best = max((m for m in MODEL_PRICES if model.startswith(m)), key=len, default=None)
-    return MODEL_PRICES[best] if best else (0.0, 0.0)
-
-
 # ── build ────────────────────────────────────────────────────────────────
 
 def sample(server: Server, agent_id: str, n: int, seed: int) -> list[dict]:
@@ -129,69 +102,11 @@ def sample(server: Server, agent_id: str, n: int, seed: int) -> list[dict]:
     return chunks
 
 
-def chunk_kind(text: str) -> str:
-    return "table" if "|---" in text or text.count("|") >= 8 else "principle"
-
-
-def details(meta: dict) -> str:
-    parts = [f"{label}: {meta[f]}" for f, label in (("Committee", "ועדה"), ("AppraisalType", "סוג"))
-             if meta.get(f)]
-    return "; ".join(parts) or "—"
-
-
-def question_prompt(chunk: dict) -> str:
-    return QUESTION_PROMPT.format(focus=FOCUS[chunk_kind(chunk["text"])], details=details(chunk["meta"]),
-                                  text=chunk["text"][:4000])
-
-
-def meta_questions(chunk: dict, i: int, prefer_block: bool = True) -> list[dict]:
-    """Questions built from the decision's metadata alone (no LLM), preferred kind
-    first: block/plot lookups have one gold decision; appraiser/committee/year
-    questions are scored by how many results carry that metadata."""
-    kinds = (_block_question, _filter_question) if prefer_block else (_filter_question, _block_question)
-    return [q for q in (kind(chunk, i) for kind in kinds) if q]
-
-
-def _block_question(chunk: dict, i: int) -> dict | None:
-    meta, key = chunk["meta"], chunk["record_key"]
-    block, plot = meta.get("Block"), meta.get("Plot")
-    if block:
-        if plot:
-            text = [f"מה הכריע השמאי המכריע בגוש {block} חלקה {plot}?",
-                    f"גוש {block} חלקה {plot} - מה נקבע בשומה?",
-                    f"יש החלטה של שמאי מכריע לגבי גוש {block} חלקה {plot}?"][i % 3]
-            expected = {"Block": block, "Plot": plot}
-        else:
-            text, expected = f"מה נקבע בהחלטת השמאי המכריע בגוש {block}?", {"Block": block}
-        return {"question": text, "type": "block_plot", "gold": [key], "expected_meta": expected}
-    return None
-
-
-def _filter_question(chunk: dict, i: int) -> dict | None:
-    meta = chunk["meta"]
-    appraiser, committee, date = meta.get("DecisiveAppraiser"), meta.get("Committee"), meta.get("DecisionDate")
-    if appraiser and committee and date:
-        topic = meta.get("AppraisalType") or "החלטות"
-        return {"question": f"{topic} של השמאי המכריע {appraiser}, {committee}, {date[:4]}",
-                "type": "metadata", "gold": [],
-                "expected_meta": {"DecisiveAppraiser": appraiser, "Committee": committee,
-                                  "DecisionDate": date[:4]}}
-    return None
-
-
-def ask_gemini(client, prompt: str) -> tuple[dict, float]:
-    from google.genai import types
-
-    resp = client.models.generate_content(
-        model=QUESTION_MODEL, contents=prompt,
-        config=types.GenerateContentConfig(
-            temperature=0, max_output_tokens=400, response_mime_type="application/json",
-            thinking_config=types.ThinkingConfig(thinking_level="minimal")))
-    usage = resp.usage_metadata
-    p_in, p_out = price(QUESTION_MODEL)
-    out_tokens = (usage.candidates_token_count or 0) + (usage.thoughts_token_count or 0)
-    cost = ((usage.prompt_token_count or 0) * p_in + out_tokens * p_out) / 1_000_000
-    return json.loads(resp.text or "{}"), cost
+def _file_item(item: dict) -> dict:
+    """The set file keeps the harness's original field name for the origin."""
+    out = {k: v for k, v in item.items() if k != "origin"}
+    out["source"] = item.get("origin")
+    return out
 
 
 def cmd_build(args) -> None:
@@ -199,69 +114,30 @@ def cmd_build(args) -> None:
     if path.exists() and not args.force:
         raise SystemExit(f"{path} exists — choose another --name or pass --force")
     server = Server()
-    chunks = sample(server, args.agent, int(args.n * 1.15) + 2, args.seed)  # spare for dropped questions
-    rng = random.Random(args.seed)
-    rng.shuffle(chunks)
-    n_meta = round(args.n * args.meta_share)
-    meta_items, llm_chunks = [], []
-    for chunk in chunks:
-        blocks = sum(1 for m in meta_items if m["type"] == "block_plot")
-        options = (meta_questions(chunk, len(meta_items), prefer_block=blocks * 2 <= len(meta_items))
-                   if len(meta_items) < n_meta else [])
-        asked = {m["question"] for m in meta_items}
-        item = next((q for q in options if q["question"] not in asked), None)
-        if item:
-            meta_items.append({**item, "source": "meta", "record_key": chunk["record_key"]})
-        else:
-            llm_chunks.append(chunk)
-    n_llm = args.n - len(meta_items)
-    prompts = [question_prompt(c) for c in llm_chunks]
-    in_tokens = sum(len(p) for p in prompts[:n_llm]) / CHARS_PER_TOKEN
-    p_in, p_out = price(QUESTION_MODEL)
-    cost = (in_tokens * p_in + n_llm * OUT_TOKENS_PER_QUESTION * p_out) / 1_000_000
-    print(f"Sampled {len(chunks)} decisions. {len(meta_items)} metadata questions (free), "
-          f"{n_llm} written by {QUESTION_MODEL}: ~{in_tokens:,.0f} input + ~{n_llm * OUT_TOKENS_PER_QUESTION:,} "
-          f"output tokens, estimated ${cost:.2f} (spare chunks are used only to replace dropped questions).")
+    chunks = sample(server, args.agent, int(args.n * eq.SPARE) + 2, args.seed)  # spare for dropped questions
+    planned = eq.plan(chunks, args.n, args.meta_share, args.seed)
+    print(f"Sampled {planned['sampled']} decisions. {len(planned['meta_items'])} metadata questions (free), "
+          f"{planned['n_llm']} written by {planned['model']}: ~{planned['input_tokens']:,} input + "
+          f"~{planned['output_tokens']:,} output tokens, estimated ${planned['cost_usd']:.2f} "
+          "(spare chunks are used only to replace dropped questions).")
     if not args.yes:
         print("Nothing written and nothing spent. Re-run with --yes to generate the set.")
         return
 
-    from src.embeddings import genai_client
+    def progress(item: dict, spent: float) -> None:
+        print(f"  ${spent:.3f} so far", end="\r")
 
-    client, items, spent, failures, stopped = genai_client(), [], 0.0, 0, None
-    for chunk, prompt in zip(llm_chunks, prompts):
-        if len(items) >= n_llm:
-            break
-        try:
-            answer, call_cost = ask_gemini(client, prompt)
-            failures = 0
-        except Exception as exc:
-            failures += 1
-            message = str(exc)[:200]
-            if failures >= 3 or any(s in message for s in ("402", "RESOURCE_EXHAUSTED", "PERMISSION_DENIED")):
-                stopped = message
-                break
-            continue
-        spent += call_cost
-        question = str(answer.get("question") or "").strip()
-        if not answer.get("answerable") or len(question) < 8:
-            continue
-        if rev.longest_shared_run(question, chunk["text"]) > MAX_COPIED_WORDS:
-            continue
-        items.append({"question": question, "type": chunk_kind(chunk["text"]), "gold": [chunk["record_key"]],
-                      "gold_section": chunk.get("section"), "source": "llm", "record_key": chunk["record_key"],
-                      "chunk_id": chunk["id"]})
-        if len(items) % 25 == 0:
-            print(f"  {len(items)}/{n_llm} questions, ${spent:.3f} so far")
-    all_items = items + meta_items
+    written = eq.write_questions(planned, on_item=progress)
+    all_items = [_file_item(i) for i in written["items"] + planned["meta_items"]]
     for i, item in enumerate(all_items):
         item["id"] = f"s{i:04d}"
     save_json(path, {"created": datetime.now().isoformat(timespec="seconds"), "agent_id": args.agent,
-                     "seed": args.seed, "model": QUESTION_MODEL, "cost_usd": round(spent, 4),
-                     "partial": bool(stopped), "items": all_items})
-    if stopped:
-        print(f"Stopped early — Gemini failed: {stopped}")
-    print(f"Wrote {len(all_items)} questions ({len(items)} written by Gemini, ${spent:.3f}) to {path}")
+                     "seed": args.seed, "model": planned["model"], "cost_usd": round(written["spent"], 4),
+                     "partial": bool(written["stopped"]), "items": all_items})
+    if written["stopped"]:
+        print(f"Stopped early — Gemini failed: {written['stopped']}")
+    print(f"Wrote {len(all_items)} questions ({len(written['items'])} written by Gemini, "
+          f"${written['spent']:.3f}) to {path}")
 
 
 # ── import-real ──────────────────────────────────────────────────────────
@@ -298,13 +174,6 @@ def cmd_import_real(args) -> None:
 
 # ── run / compare ────────────────────────────────────────────────────────
 
-def pipeline_cost(n: int) -> float:
-    """Rough server-side spend: one analysis call (~1.2k tokens) and ~1.5 search
-    queries, each reranking 20 chunks x 300 chars (~4k tokens), on LLM_MODEL_FAST."""
-    p_in, p_out = price(LLM_MODEL_FAST)
-    return n * (7_200 * p_in + 200 * p_out) / 1_000_000
-
-
 def cmd_run(args) -> None:
     path = set_path(args.set)
     if not path.exists():
@@ -315,7 +184,7 @@ def cmd_run(args) -> None:
         raise SystemExit("No labelled questions in this set")
     agent_id = args.agent or qset.get("agent_id") or DEFAULT_AGENT
     if args.mode == "pipeline":
-        print(f"{len(items)} questions through the full pipeline: estimated ${pipeline_cost(len(items)):.2f} "
+        print(f"{len(items)} questions through the full pipeline: estimated ${eq.pipeline_cost(len(items)):.2f} "
               f"of server-side Gemini ({LLM_MODEL_FAST}).")
         if not args.yes:
             print("Nothing run. Re-run with --yes to spend it.")
@@ -391,10 +260,10 @@ def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)
     b = sub.add_parser("build", help="sample chunks and write a synthetic question set")
-    b.add_argument("--n", type=int, default=300)
+    b.add_argument("--n", type=int, default=60)
     b.add_argument("--name", default="synthetic")
     b.add_argument("--seed", type=int, default=7)
-    b.add_argument("--meta-share", type=float, default=0.25, help="share of metadata questions (no LLM)")
+    b.add_argument("--meta-share", type=float, default=eq.META_SHARE, help="share of metadata questions (no LLM)")
     b.add_argument("--agent", default=DEFAULT_AGENT)
     b.add_argument("--yes", action="store_true", help="spend the estimated cost")
     b.add_argument("--force", action="store_true", help="overwrite an existing set")

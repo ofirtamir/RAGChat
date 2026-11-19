@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 from langchain_core.documents import Document  # noqa: E402
 
 from backend import auth, eval_api  # noqa: E402
-from src import admin_store, chat_log, retrieval_eval as rev  # noqa: E402
+from src import admin_store, chat_log, eval_search, retrieval_eval as rev  # noqa: E402
 from src.query_analyzer import QueryAnalysis  # noqa: E402
 from tests.test_hybrid_index import AGENT as INDEX_AGENT, index  # noqa: E402,F401
 
@@ -100,10 +100,10 @@ def test_copied_questions_are_detected():
 
 def test_sampling_is_one_chunk_per_decision_and_repeatable():
     keys = [(f"big_{i}", "big") for i in range(50)] + [("s1_0", "s1"), ("s2_0", "s2"), ("s3_0", "s3")]
-    picks = eval_api.pick_chunks(keys, 3, seed=1)
+    picks = eval_search.pick_chunks(keys, 3, seed=1)
     assert len(picks) == 3 and all(len(v) <= 3 for v in picks.values())
-    assert picks == eval_api.pick_chunks(list(reversed(keys)), 3, seed=1)
-    assert "big" not in eval_api.pick_chunks(keys, 10, seed=1, exclude={"big"})
+    assert picks == eval_search.pick_chunks(list(reversed(keys)), 3, seed=1)
+    assert "big" not in eval_search.pick_chunks(keys, 10, seed=1, exclude={"big"})
 
 
 # ── endpoints ────────────────────────────────────────────────────────────
@@ -176,8 +176,8 @@ def test_pipeline_runs_analysis_search_and_rerank_per_search_query(client, index
             d.metadata["_rerank"] = i
         return list(reversed(docs))[:1]  # keep only the weakest-looking chunk, to see the rerank applied
 
-    monkeypatch.setattr(eval_api.query_analyzer, "analyze_query", analyze)
-    monkeypatch.setattr(eval_api.reranker, "rerank_documents", rerank)
+    monkeypatch.setattr(eval_search.query_analyzer, "analyze_query", analyze)
+    monkeypatch.setattr(eval_search.reranker, "rerank_documents", rerank)
     resp = client.post("/api/worker/eval/search", json={
         "agent_id": "t", "mode": "pipeline", "items": [{"query": "פיצויים והיטל"}, {"query": "שלום"}]})
     assert resp.status_code == 200
@@ -196,8 +196,8 @@ def test_pipeline_falls_back_to_the_raw_question_when_analysis_fails(client, ind
     def broken(query, history):
         raise RuntimeError("402 prepaid credit")
 
-    monkeypatch.setattr(eval_api.query_analyzer, "analyze_query", broken)
-    monkeypatch.setattr(eval_api.reranker, "rerank_documents", lambda q, docs, top_k=10: docs[:top_k])
+    monkeypatch.setattr(eval_search.query_analyzer, "analyze_query", broken)
+    monkeypatch.setattr(eval_search.reranker, "rerank_documents", lambda q, docs, top_k=10: docs[:top_k])
     out = client.post("/api/worker/eval/search", json={
         "agent_id": "t", "mode": "pipeline", "items": [{"query": "פיצויים סעיף 197"}]}).json()["items"][0]
     assert out["search_queries"] == ["פיצויים סעיף 197"] and out["error"].startswith("analyzer")

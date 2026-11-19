@@ -162,6 +162,19 @@ def known_keys(agent_id: str, keys: list[str]) -> set[str]:
     return {r[0] for r in rows}
 
 
+def titles(agent_id: str, keys: list[str]) -> dict[str, str]:
+    """{record_key: title} for the keys that are in the catalog."""
+    keys = sorted({k for k in keys if k})[:2000]
+    if not keys:
+        return {}
+    with _lock, _connect() as conn:
+        rows = conn.execute(
+            f"SELECT record_key, title FROM documents WHERE agent_id = ? AND record_key IN ({','.join('?' * len(keys))})",
+            (agent_id, *keys),
+        ).fetchall()
+    return {r[0]: r[1] for r in rows}
+
+
 # ── search ───────────────────────────────────────────────────────────────
 
 def _where(agent: dict, status: str | None, q: str | None, filters: dict | None) -> tuple[str, list]:
