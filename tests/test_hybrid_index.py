@@ -135,6 +135,23 @@ def index(tmp_path, monkeypatch):
     return add
 
 
+def test_maintenance_does_not_keep_old_copies_of_the_table(index, monkeypatch):
+    """Each compaction writes a new version; old ones must not pile up on the volume."""
+    from datetime import timedelta
+
+    monkeypatch.setattr(hybrid_index, "KEEP_VERSIONS", timedelta(0))
+    for i in range(4):
+        index(f"n{i}", "חיפה", "1", "2025-02-02", [(0, f"1. רקע. החלטה מספר {i} על היטל השבחה.")])
+        hybrid_index.maintain(AGENT)
+    table = hybrid_index._table(AGENT)
+    assert len(table.list_versions()) <= 2
+    assert hybrid_index.record_keys(AGENT) == {"a1", "b2", "c3", "n0", "n1", "n2", "n3"}  # nothing lost
+    index("n4", "חיפה", "1", "2025-02-02", [(0, "1. רקע. עוד החלטה.")])
+    assert hybrid_index.drop_old_versions(AGENT, timedelta(0))["old_versions"] >= 1
+    assert len(hybrid_index._table(AGENT).list_versions()) == 1
+    assert hybrid_index.count(AGENT) == 9
+
+
 def test_count_sources_and_keys(index):
     assert hybrid_index.count(AGENT) == 4
     indexed = [getattr(ix, "columns", []) for ix in hybrid_index._table(AGENT).list_indices()]

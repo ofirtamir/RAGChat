@@ -7,6 +7,7 @@ langchain-google-genai>=2.0.0
 langchain-chroma>=0.2.0
 chromadb>=0.5.0
 lancedb==0.39.0
+pylance==14.0.3  # deletes old index versions without writing (src/hybrid_index.drop_old_versions)
 google-genai>=1.67.0
 streamlit>=1.38.0
 pypdf>=4.0.0

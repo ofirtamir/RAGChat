@@ -14,6 +14,7 @@ from __future__ import annotations
 import logging
 import queue
 import threading
+import time
 
 from config import BATCH_MIN_DOCUMENTS
 from src import admin_store, hybrid_index, library_store
@@ -24,7 +25,9 @@ logger = logging.getLogger(__name__)
 _queue: "queue.Queue[tuple[str, str]]" = queue.Queue()
 _thread: threading.Thread | None = None
 _thread_lock = threading.Lock()
-MAINTAIN_EVERY = 200     # documents indexed online between index maintenance runs
+MAINTAIN_EVERY = 200          # documents indexed online between index maintenance runs
+MAINTAIN_IDLE = 60.0          # seconds without new documents before maintaining
+MAINTAIN_MIN_INTERVAL = 900.0  # never maintain more often than this when idle
 
 
 def document_meta(agent: dict, doc: dict) -> dict:
@@ -137,13 +140,22 @@ def _maintain(agent_ids: set[str]) -> None:
 
 
 def _run() -> None:
-    """Index queued documents one by one. When the queue drains (or every
-    MAINTAIN_EVERY documents in a long run) the touched indexes are maintained:
-    without it new rows pile up as small files outside the keyword index, and
-    the vector index is never built."""
-    touched, since = set(), 0
+    """Index queued documents one by one, and maintain the touched indexes every
+    MAINTAIN_EVERY documents, or once the queue has been idle for MAINTAIN_IDLE
+    seconds — but not more often than every MAINTAIN_MIN_INTERVAL seconds.
+    Without maintenance new rows pile up as small files outside the keyword index
+    and the vector index is never built; run after every document (a worker
+    sends them one at a time, so the queue drains each time) it rewrote the
+    whole table per document and filled the volume."""
+    touched, since, last = set(), 0, time.monotonic()
     while True:
-        agent_id, key = _queue.get()
+        try:
+            agent_id, key = _queue.get(timeout=MAINTAIN_IDLE)
+        except queue.Empty:
+            if touched and time.monotonic() - last >= MAINTAIN_MIN_INTERVAL:
+                _maintain(touched)
+                touched, since, last = set(), 0, time.monotonic()
+            continue
         try:
             process(agent_id, key)
         except Exception:  # keep the indexer thread alive whatever one document does
@@ -152,9 +164,23 @@ def _run() -> None:
             _queue.task_done()
         touched.add(agent_id)
         since += 1
-        if _queue.empty() or since >= MAINTAIN_EVERY:
+        if since >= MAINTAIN_EVERY:
             _maintain(touched)
-            touched, since = set(), 0
+            touched, since, last = set(), 0, time.monotonic()
+
+
+def free_old_versions() -> None:
+    """At server start: drop old index versions left behind (frees the volume)."""
+    from src.agents import list_agents
+
+    for agent in list_agents():
+        try:
+            stats = hybrid_index.drop_old_versions(agent)
+            if stats["old_versions"]:
+                logger.info("index %s: removed %s old versions (%s bytes)", agent["id"],
+                            stats["old_versions"], stats["bytes_removed"])
+        except Exception:
+            logger.exception("removing old index versions failed for %s", agent.get("id"))
 
 
 def enqueue(agent_id: str, keys: list[str]) -> None:

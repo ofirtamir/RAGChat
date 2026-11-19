@@ -79,14 +79,36 @@ def test_a_large_library_is_recognised_without_reading_the_index(monkeypatch):
 
 # ── maintenance ──────────────────────────────────────────────────────────
 
-def test_the_index_is_maintained_when_the_indexing_queue_drains(monkeypatch):
+def test_the_index_is_maintained_once_the_queue_is_idle_not_after_every_document(monkeypatch):
+    import time
+
     processed, maintained = [], []
-    monkeypatch.setattr(library_index, "process", lambda agent_id, key: processed.append(key))
+    monkeypatch.setattr(library_index, "MAINTAIN_IDLE", 0.05)
+    monkeypatch.setattr(library_index, "MAINTAIN_MIN_INTERVAL", 0.0)
+    monkeypatch.setattr(library_index, "process", lambda agent_id, key: (processed.append(key), time.sleep(0.01)))
     monkeypatch.setattr(hybrid_index, "maintain", lambda agent: maintained.append(agent["id"]))
-    library_index.enqueue(AGENT["id"], ["k1", "k2", "k3"])
-    library_index._queue.join()
+    for key in ("k1", "k2", "k3"):  # one at a time, as the worker sends them: the queue drains each time
+        library_index.enqueue(AGENT["id"], [key])
+        library_index._queue.join()
     assert processed == ["k1", "k2", "k3"]
-    assert maintained and set(maintained) == {AGENT["id"]}
+    deadline = time.monotonic() + 3
+    while not maintained and time.monotonic() < deadline:
+        time.sleep(0.02)
+    assert maintained == [AGENT["id"]]   # once, after the queue went idle
+
+
+def test_idle_maintenance_waits_for_the_minimum_interval(monkeypatch):
+    import time
+
+    maintained = []
+    monkeypatch.setattr(library_index, "MAINTAIN_IDLE", 0.02)
+    monkeypatch.setattr(library_index, "MAINTAIN_MIN_INTERVAL", 3600.0)
+    monkeypatch.setattr(library_index, "process", lambda agent_id, key: None)
+    monkeypatch.setattr(hybrid_index, "maintain", lambda agent: maintained.append(agent["id"]))
+    library_index.enqueue(AGENT["id"], ["k1"])
+    library_index._queue.join()
+    time.sleep(0.2)
+    assert maintained == []
 
 
 # ── failed re-index ──────────────────────────────────────────────────────

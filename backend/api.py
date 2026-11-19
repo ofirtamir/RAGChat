@@ -59,6 +59,7 @@ app.include_router(admin_insights_router)
 app.include_router(eval_router)
 app.include_router(admin_eval_router)
 app.include_router(feedback_router)
+library_index.free_old_versions()  # before anything writes: a full volume refuses writes
 library_index.resume_interrupted()
 eval_store.fail_interrupted()  # a benchmark job running when the server stopped is gone
 

@@ -14,6 +14,7 @@ import json
 import logging
 import re
 import threading
+from datetime import timedelta
 
 from langchain_core.documents import Document
 
@@ -25,6 +26,7 @@ logger = logging.getLogger(__name__)
 CANDIDATES = 30          # per search method, before fusion
 RRF_K = 60
 ANN_MIN_ROWS = 50_000    # below this an exact (flat) vector scan is fast enough
+KEEP_VERSIONS = timedelta(minutes=10)  # old table versions kept for searches still reading them
 _KEY_RE = re.compile(r"^[A-Za-z0-9_\-]+$")
 _write_lock = threading.Lock()
 _db = None
@@ -178,7 +180,11 @@ def _ensure_keyword_index(table) -> None:
 def maintain(agent: dict) -> None:
     """Compact files, fold new rows into the keyword index, and build the vector
     index once the table is big enough that a flat scan gets slow. Runs after a
-    Batch job and whenever the online indexing queue drains (src/library_index)."""
+    Batch job and from the online indexer (src/library_index).
+
+    Every compaction writes a new copy of the table; LanceDB keeps the old copies
+    for 7 days unless told otherwise, which filled the volume when maintenance
+    ran after each document. Old versions are dropped after KEEP_VERSIONS."""
     table = _table(agent)
     if table is None:
         return
@@ -188,7 +194,19 @@ def maintain(agent: dict) -> None:
         if rows >= ANN_MIN_ROWS and not has_vector_index:
             table.create_index(metric="cosine", vector_column_name="vector", index_type="IVF_PQ",
                                num_partitions=max(16, int(rows ** 0.5)), num_sub_vectors=EMBEDDING_DIM // 8)
-        table.optimize()
+        table.optimize(cleanup_older_than=KEEP_VERSIONS)
+
+
+def drop_old_versions(agent: dict, older_than: timedelta = KEEP_VERSIONS) -> dict:
+    """Delete the files of table versions older than `older_than` (frees disk; the
+    current version is untouched). Only deletes, so it works on a full volume —
+    unlike optimize(), which compacts (writes) first. Needs pylance."""
+    table = _table(agent)
+    if table is None:
+        return {"bytes_removed": 0, "old_versions": 0}
+    with _write_lock:
+        stats = table.to_lance().cleanup_old_versions(older_than=older_than)
+    return {"bytes_removed": getattr(stats, "bytes_removed", 0), "old_versions": getattr(stats, "old_versions", 0)}
 
 
 # ── reading ──────────────────────────────────────────────────────────────
