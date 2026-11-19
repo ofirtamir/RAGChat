@@ -14,6 +14,8 @@ import json
 import logging
 import re
 import threading
+import warnings
+from datetime import timedelta
 
 from langchain_core.documents import Document
 
@@ -25,6 +27,11 @@ logger = logging.getLogger(__name__)
 CANDIDATES = 30          # per search method, before fusion
 RRF_K = 60
 ANN_MIN_ROWS = 50_000    # below this an exact (flat) vector scan is fast enough
+# Every write and every compaction leaves a full new version of the table, and
+# LanceDB keeps old versions for 7 days by default. With maintenance after
+# almost every document, those copies filled the 5 GB volume (2026-11-19). A
+# search reads one version for well under a minute, so keep old ones that long.
+KEEP_OLD_VERSIONS = timedelta(minutes=1)
 _KEY_RE = re.compile(r"^[A-Za-z0-9_\-]+$")
 _write_lock = threading.Lock()
 _db = None
@@ -188,7 +195,28 @@ def maintain(agent: dict) -> None:
         if rows >= ANN_MIN_ROWS and not has_vector_index:
             table.create_index(metric="cosine", vector_column_name="vector", index_type="IVF_PQ",
                                num_partitions=max(16, int(rows ** 0.5)), num_sub_vectors=EMBEDDING_DIM // 8)
-        table.optimize()
+        table.optimize(cleanup_older_than=KEEP_OLD_VERSIONS)
+
+
+def reclaim_space(agents: list[dict]) -> None:
+    """At startup, before anything reads or writes the index: delete every old
+    table version and the files left behind by writes that failed (on a full
+    disk, for one). It only deletes, so it works when the disk is full.
+    delete_unverified is safe only because no write can be in progress here."""
+    for agent in agents:
+        try:
+            table = _table(agent)
+            if table is None:
+                continue
+            # deprecated in favour of optimize(), which compacts first and so
+            # needs free space; this call only deletes (it needs pylance)
+            with _write_lock, warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                stats = table.cleanup_old_versions(older_than=timedelta(0), delete_unverified=True)
+            logger.warning("index %s: removed %s old versions, %.1f MB", agent["id"],
+                        getattr(stats, "old_versions", "?"), getattr(stats, "bytes_removed", 0) / 1e6)
+        except Exception:
+            logger.exception("could not clean up old versions of the %s index", agent.get("id"))
 
 
 # ── reading ──────────────────────────────────────────────────────────────

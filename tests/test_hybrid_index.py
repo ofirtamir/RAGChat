@@ -216,6 +216,25 @@ def test_reindex_replaces_and_delete_removes(index):
         hybrid_index.delete_document(AGENT, "x' OR '1'='1")
 
 
+def test_old_versions_do_not_pile_up_on_disk(index, tmp_path):
+    def disk_bytes():
+        return sum(p.stat().st_size for p in (tmp_path / "lancedb").rglob("*") if p.is_file())
+
+    for i in range(5):  # re-index and maintain, as the online indexer does per document
+        index("a1", "כפר סבא", "6426", "2026-07-10", [(0, f"1. רקע. גרסה {i} של ההחלטה.")])
+        hybrid_index.maintain(AGENT)
+    table = hybrid_index._table(AGENT)
+    assert len(table.list_versions()) > 1   # the last minute's versions are still kept
+    before = disk_bytes()
+
+    hybrid_index.reclaim_space([AGENT, {"id": "no_such_index", "filters": []}])
+    table = hybrid_index._table(AGENT)
+    assert len(table.list_versions()) == 1
+    assert disk_bytes() < before
+    assert hybrid_index.record_keys(AGENT) == {"a1", "b2", "c3"}
+    assert [d.metadata["record_key"] for d in hybrid_index.search(AGENT, "גרסה 4", k=1)] == ["a1"]
+
+
 # ── batch indexing ───────────────────────────────────────────────────────
 
 def test_batch_job_results_are_written_per_document(tmp_path, monkeypatch):
