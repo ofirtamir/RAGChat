@@ -207,6 +207,9 @@ class ParseResult(BaseModel):
 
 
 MIN_TEXT_CHARS = 100  # less than this across the whole PDF means a scan with no text layer
+# a parse result is wanted while the document is claimed, or back in the queue
+# after a slow worker's claim expired (its result is still good)
+ACCEPTS_RESULT = ("processing", "queued")
 
 
 @worker.post("/catalog")
@@ -227,6 +230,11 @@ def worker_result(result: ParseResult):
     doc = library_store.get_document(result.agent_id, result.record_key, with_parsed=False)
     if doc is None:
         raise HTTPException(status_code=404, detail="Document not found")
+    if doc["status"] not in ACCEPTS_RESULT:
+        # a late or duplicate result: the document was cancelled, or another
+        # worker already reported it — writing it would mark an indexed document
+        # 'parsed' while its old chunks stay in search
+        return {"status": "ignored"}
     if not result.ok:
         library_store.set_status(result.agent_id, result.record_key, "failed",
                                  error=(result.error or "הפרסור נכשל")[:400])

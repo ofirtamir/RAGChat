@@ -74,14 +74,14 @@ def _set_job(name: str, state: str, error: str | None = None) -> None:
 
 def _plan(agent: dict, keys: list[str]) -> list[list[tuple[dict, list]]]:
     """Group documents into jobs under the size limit: [[(doc, chunks), ...], ...]."""
-    from src.library_index import build_chunks, friendly_error
+    from src.library_index import build_chunks, mark_failed
 
     jobs, current, size = [], [], 0
     for key in keys:
         doc = library_store.get_document(agent["id"], key)
         chunks = build_chunks(doc) if doc and doc.get("parsed_pages") else []
         if not chunks:
-            library_store.set_status(agent["id"], key, "parsed", error=friendly_error("אין טקסט מפורסר"))
+            mark_failed(agent["id"], key, "אין טקסט מפורסר")
             continue
         doc_bytes = sum(len(c.text.encode("utf-8")) + 64 for c in chunks)
         if current and size + doc_bytes > MAX_JOB_BYTES:
@@ -100,7 +100,7 @@ def submit(agent_id: str, keys: list[str]) -> list[str]:
 
     from src.agents import get_agent
     from src.embeddings import MODEL_NAME, embed_config, genai_client
-    from src.library_index import friendly_error
+    from src.library_index import mark_failed
 
     agent = get_agent(agent_id)
     names = []
@@ -116,7 +116,7 @@ def submit(agent_id: str, keys: list[str]) -> list[str]:
         except Exception as exc:
             logger.exception("batch submit failed")
             for doc, _ in group:
-                library_store.set_status(agent_id, doc["record_key"], "parsed", error=friendly_error(exc))
+                mark_failed(agent_id, doc["record_key"], exc)
             continue
         documents = [[doc["record_key"], len(chunks)] for doc, chunks in group]
         with _connect() as conn:
@@ -133,7 +133,7 @@ def _finish(job_row: dict, job) -> None:
     """Write a finished job's vectors to the index, document by document."""
     from src.agents import get_agent
     from src.embeddings import count_embedding_tokens, normalize
-    from src.library_index import build_chunks, friendly_error, store_document
+    from src.library_index import build_chunks, mark_failed, store_document
     from src import hybrid_index
 
     agent = get_agent(job_row["agent_id"])
@@ -157,7 +157,7 @@ def _finish(job_row: dict, job) -> None:
             store_document(agent, doc, chunks, vectors, tokens, tokens * price / 1_000_000, "embedding-batch")
         except Exception as exc:
             logger.exception("batch result for %s failed", key)
-            library_store.set_status(agent["id"], key, "parsed", error=friendly_error(exc))
+            mark_failed(agent["id"], key, exc)
     try:
         hybrid_index.maintain(agent)
     except Exception:
@@ -166,7 +166,7 @@ def _finish(job_row: dict, job) -> None:
 
 def poll_once() -> None:
     from src.embeddings import genai_client
-    from src.library_index import friendly_error
+    from src.library_index import mark_failed
 
     for row in _jobs():
         try:
@@ -181,7 +181,7 @@ def poll_once() -> None:
         elif state.endswith(_DONE_BAD):
             message = str(job.error or state)[:300]
             for key, _ in row["documents"]:
-                library_store.set_status(row["agent_id"], key, "parsed", error=friendly_error(message))
+                mark_failed(row["agent_id"], key, message)
             _set_job(row["name"], "failed", message)
 
 
