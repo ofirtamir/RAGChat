@@ -137,8 +137,12 @@ def test_party_name_from_titles(ctx):
     assert hard["_decision"].values == ["k1", "k2"]
     hard, _ = detect(ctx, "זיתוני נגד ירושלים")          # one word + "נגד" is enough
     assert hard["_decision"].values == ["k1", "k2"] and hard["Committee"].values == ["ירושלים"]
-    hard, soft = detect(ctx, "מה קרה לזיתוני")            # prefix removed only because the word is in titles
-    assert "_decision" not in hard and soft["_decision"].values == ["k1", "k2"]
+    hard, _ = detect(ctx, "ההחלטה בעניין לזיתוני")        # prefix removed: the word is in titles
+    assert hard["_decision"].values == ["k1", "k2"]
+    hard, soft = detect(ctx, "מה קרה לזיתוני אלמוג")      # no "נ'"/"נגד": ordinary words also occur in titles
+    assert "_decision" not in hard and "_decision" not in soft
+    hard, soft = detect(ctx, "היטל השבחה בגין לקוח כלשהו")  # title words, but no party cue
+    assert "_decision" not in hard
 
 
 def test_appraiser_name_orders_and_nicknames(ctx):
@@ -162,7 +166,9 @@ def test_uncertain_matches_do_not_filter(ctx):
     hard, soft = detect(ctx, "השמאית אשך לבנה")
     assert "DecisiveAppraiser" not in hard and soft["DecisiveAppraiser"].values == ["אשד לבנה"]
     hard, soft = detect(ctx, "החלטות באזור המרכז")         # "אזור" is an everyday word
-    assert "Committee" not in hard
+    assert "Committee" not in hard and "Committee" not in soft
+    hard, soft = detect(ctx, "עסקאות ברחובות דוד ילין בתל אביב")
+    assert hard["Committee"].values == ["תל אביב-יפו"] and "Committee" not in soft
     hard, _ = detect(ctx, "ועדה מקומית אזור")
     assert hard["Committee"].values == ["אזור"]
 
