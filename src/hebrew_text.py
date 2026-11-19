@@ -69,13 +69,38 @@ def keyword_text(text: str) -> str:
     return " ".join(keyword_terms(text))
 
 
+_DOUBLED = re.compile(r"(ו|י)\1+")
+_MAX_SPELLINGS = 16
+
+
+def spellings(word: str) -> list[str]:
+    """Other common spellings of a Hebrew word: full and defective spelling
+    differ by a doubled ו/י ("קרית"/"קריית", "ועדה"/"וועדה", "בניה"/"בנייה").
+    Documents are indexed as written, so the query asks for both forms."""
+    if len(word) < 4 or not word[0].isalpha() or word.isascii():
+        return []
+    out = []
+    collapsed = _DOUBLED.sub(r"\1", word)
+    if collapsed != word:
+        out.append(collapsed)
+    if word.startswith("ו") and not word.startswith("וו"):
+        out.append("ו" + word)
+    for i in range(1, len(collapsed) - 1):
+        if collapsed[i] in "וי":
+            out.append(collapsed[:i + 1] + collapsed[i] + collapsed[i + 1:])
+    return [w for w in dict.fromkeys(out) if w != word][:2]
+
+
 def keyword_query(text: str) -> str:
-    """A keyword query for `text`: its distinct terms, longest-first."""
+    """A keyword query for `text`: its distinct terms, longest-first, then the
+    other spellings of those terms (no re-indexing needed)."""
     seen: dict[str, None] = {}
     for term in keyword_terms(text):
         if len(term) >= 2 or term.isdigit():
             seen.setdefault(term, None)
-    return " ".join(sorted(seen, key=len, reverse=True)[:32])
+    main = sorted(seen, key=len, reverse=True)[:32]
+    extra = [s for t in main for s in spellings(t) if s not in seen]
+    return " ".join(main + list(dict.fromkeys(extra))[:_MAX_SPELLINGS])
 
 
 _BLOCK = re.compile(r"גוש\s*(\d{3,6})")

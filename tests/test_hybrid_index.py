@@ -163,12 +163,31 @@ def test_filters_apply_to_both_search_methods(index):
 def test_block_in_the_question_becomes_a_filter(index):
     hits = hybrid_index.search(AGENT, "מה נקבע בגוש 6426?", k=5)
     assert hits and {h.metadata["record_key"] for h in hits} == {"a1"}
-    assert hybrid_index.build_where(AGENT, {"Block": "100"}, "גוש 6426") == "Block = '100'"
+    # the user's own choice wins over the number in the question
+    assert hybrid_index.build_where(AGENT, {"Block": "100"}, "גוש 6426") == \
+        "regexp_like(Block, '(^|[^0-9])100([^0-9]|$)')"
+
+
+def test_a_block_stored_with_several_numbers_is_found(index):
+    index("d4", "חיפה", "7556, 8548", "2024-02-02", [(0, "1. רקע. שתי חלקות בשני גושים.")])
+    hits = hybrid_index.search(AGENT, "מה נקבע בגוש 8548?", k=5)
+    assert {h.metadata["record_key"] for h in hits} == {"d4"}
+
+
+def test_uncertain_values_only_raise_matching_rows(index):
+    from src.filter_conditions import Condition
+    from src.filter_step import FilterPlan
+
+    plan = FilterPlan(soft=[Condition("Committee", "in", ["כפר סבא"], certain=False)])
+    found = hybrid_index._hybrid(AGENT, "היטל השבחה", None, plan=plan)
+    assert {r["record_key"] for r in found["preferred"]} == {"a1"}
+    assert {"a1", "c3"} <= {found["rows"][i]["record_key"] for i, _ in found["fused"]}   # nothing removed
+    assert found["rows"][found["fused"][0][0]]["record_key"] == "a1"
 
 
 def test_quotes_in_filter_values_are_escaped():
     assert hybrid_index.build_where(AGENT, {"Committee": "תל אביב' OR 1=1"}) == \
-        "Committee = 'תל אביב'' OR 1=1'"
+        "Committee IN ('תל אביב'' OR 1=1')"
 
 
 def test_hits_expand_to_their_section_and_full_document_is_ordered(index):
