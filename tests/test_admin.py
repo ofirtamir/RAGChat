@@ -222,6 +222,22 @@ def test_queue_and_index_everything_matching_a_filter(client, indexed):
     assert r.json() == {"status": "indexing"} and indexed["enqueued"] == [doc["record_key"]]
 
 
+def test_worker_requeues_documents_whose_pictures_were_read(client):
+    client.post("/api/worker/catalog", json={"agent_id": "test_agent", "records": [record(1), record(2), record(3)]})
+    keys = [d["record_key"] for d in library_store.search(AGENT)["documents"]]
+    library_store.set_status("test_agent", keys[0], "indexed")
+    library_store.set_status("test_agent", keys[1], "parsed")    # keys[2] stays in the catalog
+    r = client.post("/api/worker/requeue", json={"agent_id": "test_agent", "keys": keys})
+    assert r.json()["queued"] == 2 and sorted(r.json()["keys"]) == sorted(keys[:2])
+    indexed, parsed, untouched = (library_store.get_document("test_agent", k) for k in keys)
+    assert indexed["status"] == "queued" and indexed["auto_index"]          # re-indexed after the new parse
+    assert parsed["status"] == "queued" and not parsed["auto_index"]
+    assert untouched["status"] == "catalog"
+    library_store.set_status("test_agent", keys[1], "processing")   # being parsed: not moved, caller retries
+    assert client.post("/api/worker/requeue", json={"agent_id": "test_agent", "keys": keys}).json()["keys"] == [keys[0]]
+    assert client.post("/api/worker/requeue", json={"agent_id": "test_agent", "keys": []}).status_code == 422
+
+
 def test_scanned_and_failed_documents_are_marked(client):
     client.post("/api/worker/catalog", json={"agent_id": "test_agent", "records": [record(1), record(2)]})
     client.post("/api/admin/library/action", json={

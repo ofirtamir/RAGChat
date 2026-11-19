@@ -65,6 +65,32 @@ def test_the_free_filter_tells_a_table_from_a_photo(tmp_path):
     assert verdicts == [True, False]
 
 
+def _page_with(tmp_path, array):
+    h, w = array.shape[:2]
+    png = pymupdf.Pixmap(pymupdf.csRGB, w, h, array.astype(np.uint8).tobytes(), 0).tobytes("png")
+    doc = pymupdf.open()
+    page = doc.new_page()
+    rect = pymupdf.Rect(60, 100, 540, 260)
+    page.insert_image(rect, stream=png)
+    return doc, page, rect
+
+
+def test_a_spreadsheet_with_coloured_cells_is_a_document_but_a_flat_map_is_not(tmp_path):
+    sheet = np.full((160, 480, 3), 255)
+    sheet[:32] = (255, 255, 0)                     # yellow header row
+    sheet[:, :60] = (230, 60, 60)                  # a red marking column
+    sheet[::32, :] = 0                             # grid lines
+    sheet[:, ::96] = 0
+    doc, page, rect = _page_with(tmp_path, sheet)
+    assert image_reader.looks_like_document(page, rect)
+
+    zoning = np.zeros((160, 480, 3))
+    zoning[:, :240] = (230, 120, 40)               # orange and green plots: mid-tones
+    zoning[:, 240:] = (90, 170, 90)
+    doc, page, rect = _page_with(tmp_path, zoning)
+    assert not image_reader.looks_like_document(page, rect)
+
+
 def test_clean_answer():
     assert image_reader.clean_answer("NONE") == ""
     assert image_reader.clean_answer("```\n| א | ב |\n|---|---|\n| 1 | 2 |\n```").endswith("| 1 | 2 |")
