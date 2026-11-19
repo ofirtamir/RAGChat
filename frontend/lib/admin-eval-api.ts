@@ -9,7 +9,7 @@ export type QuestionSource = "synthetic" | "real" | "manual"
 export type MetricRow = { n: number; errors: number } & Partial<Record<MetricName, number>>
 
 export type MetricName =
-  | "recall@5" | "recall@10" | "recall@20" | "mrr@20" | "hit@1" | "section_hit@10" | "distinct@10"
+  | "recall@5" | "recall@10" | "recall@20" | "mrr@20" | "hit@1" | "precision@10" | "section_hit@10" | "distinct@10"
   | "filter_acc@10" | "vector_recall@20" | "keyword_recall@20" | "candidate_recall@20"
 
 export interface EvalSet {
@@ -75,6 +75,14 @@ export interface RetrievedDecision extends Decision {
   rank: number
 }
 
+/** What the question's answer is, when it was written from a decision (decisions build). */
+export type ExpectedAnswer =
+  | { field: string; value: string; quote: string }
+  | { points: string[] }
+  | { topic: string; committee: string | null; candidates: number }
+
+export type BuildMode = "decisions" | "chunks"
+
 export interface EvalQuestion {
   id: string
   set_id: string
@@ -83,6 +91,9 @@ export interface EvalQuestion {
   gold: Decision[]
   gold_section: string | null
   expected_meta: Record<string, string>
+  answer: ExpectedAnswer | null
+  /** a person's check of the stored answer: true = correct, false = wrong, null = not checked */
+  verified: boolean | null
   source: QuestionSource
   asked_at: string | null
   created_at: string
@@ -116,6 +127,7 @@ export interface QuestionFilter {
 
 export interface BuildEstimate {
   n: number
+  mode: BuildMode
   sampled: number
   meta_questions: number
   llm_questions: number
@@ -179,7 +191,7 @@ export const getEvalQuestions = (setId: string, filter: QuestionFilter, token: s
   call<QuestionPage>(`${BASE}/sets/${enc(setId)}/questions?${qs({ ...filter })}`, token)
 
 export const buildEvalSet = (
-  body: { agent_id: string; n: number; name?: string; confirm: boolean }, token: string | undefined,
+  body: { agent_id: string; n: number; name?: string; mode: BuildMode; confirm: boolean }, token: string | undefined,
 ) => call<{ estimate: BuildEstimate; budget: EvalBudget; set?: EvalSet; job?: EvalJob }>(`${BASE}/sets/build`, token, post(body))
 
 export const importRealQuestions = (agentId: string, days: number, token: string | undefined) =>
@@ -194,7 +206,9 @@ export const deleteEvalSet = (setId: string, token: string | undefined) =>
   call<{ deleted: boolean }>(`${BASE}/sets/${enc(setId)}`, token, { method: "DELETE" })
 
 export const patchEvalQuestion = (
-  id: string, patch: { gold?: string[]; gold_section?: string; type?: string }, token: string | undefined,
+  id: string,
+  patch: { gold?: string[]; gold_section?: string; type?: string; verified?: "correct" | "wrong" | "unchecked" },
+  token: string | undefined,
 ) => call<EvalQuestion>(`${BASE}/questions/${enc(id)}`, token, { method: "PATCH", body: JSON.stringify(patch) })
 
 export const deleteEvalQuestion = (id: string, token: string | undefined) =>

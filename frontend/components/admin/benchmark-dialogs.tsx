@@ -6,8 +6,8 @@ import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import {
-  addEvalQuestion, buildEvalSet, BuildEstimate, Decision, EvalBudget, EvalQuestion, EvalSet, getGoldSuggestions,
-  lookupDecisions, patchEvalQuestion, RunEstimate, RunMode, startEvalRun,
+  addEvalQuestion, buildEvalSet, BuildEstimate, BuildMode, Decision, EvalBudget, EvalQuestion, EvalSet,
+  getGoldSuggestions, lookupDecisions, patchEvalQuestion, RunEstimate, RunMode, startEvalRun,
 } from "@/lib/admin-eval-api"
 import { cn } from "@/lib/utils"
 import { MODE_LABEL, TYPE_LABEL } from "./benchmark-labels"
@@ -17,6 +17,20 @@ import { ErrorNote, num, usdPrecise } from "./shared"
 const errorText = (e: unknown, fallback: string) => (e instanceof Error ? e.message : fallback)
 
 const overBudget = (budget: EvalBudget | null, cost: number) => !!budget && cost > budget.remaining_usd
+
+const BUILD_MODES: Record<BuildMode, { label: string; hint: string }> = {
+  decisions: {
+    label: "בסגנון שמאים (מומלץ)",
+    hint: "דוגמים החלטות שלמות. חלק מהשאלות נבנות מהכותרת ומגוש/חלקה בלי מודל; את השאר כותב מודל זול: פרט מהחלטה " +
+      "(עם התשובה וציטוט מדויק מההחלטה — ציטוט שלא נמצא בהחלטה נזרק), ניתוח החלטה (עם הנקודות שתשובה טובה צריכה), " +
+      "ושאלות נושא על כל המאגר (כופר חניה, פטור 140 מ״ר וכו׳) שההחלטות הנכונות שלהן הן כל ההחלטות שדנות בנושא.",
+  },
+  chunks: {
+    label: "שאלה לכל קטע",
+    hint: "דוגמים החלטות מהאינדקס. כ-40% מהשאלות נבנות מפרטי ההחלטה (גוש/חלקה, שמאי, ועדה) בלי מודל; את השאר כותב " +
+      "מודל זול — שאלה אחת לקטע, ושאלה שמעתיקה מהקטע נזרקת. ההחלטה שממנה נכתבה השאלה היא ״ההחלטה הנכונה״.",
+  },
+}
 
 /** What is left of the benchmark budget, and whether this action fits in it. */
 function BudgetLine({ budget, cost }: { budget: EvalBudget | null; cost: number }) {
@@ -60,18 +74,19 @@ export function BuildDialog({ open, agentId, budget, token, onClose, onStarted }
 }) {
   const [n, setN] = useState(60)
   const [name, setName] = useState("")
+  const [mode, setMode] = useState<BuildMode>("decisions")
   const [estimate, setEstimate] = useState<BuildEstimate | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState("")
 
   useEffect(() => { if (open) { setEstimate(null); setError("") } }, [open])
-  useEffect(() => { setEstimate(null) }, [n])
+  useEffect(() => { setEstimate(null) }, [n, mode])
 
   const go = async (confirm: boolean) => {
     setBusy(true)
     setError("")
     try {
-      const res = await buildEvalSet({ agent_id: agentId, n, name, confirm }, token)
+      const res = await buildEvalSet({ agent_id: agentId, n, name, mode, confirm }, token)
       setEstimate(res.estimate)
       if (confirm && res.set) onStarted(res.set)
     } catch (e) {
@@ -83,7 +98,12 @@ export function BuildDialog({ open, agentId, budget, token, onClose, onStarted }
 
   return (
     <Shell open={open} onClose={onClose} title="בניית סט שאלות"
-      description="דוגמים החלטות מהאינדקס. כ-40% מהשאלות נבנות מפרטי ההחלטה (גוש/חלקה, שמאי, ועדה) בלי מודל; את השאר כותב מודל זול — שאלה אחת לקטע, ושאלה שמעתיקה מהקטע נזרקת. ההחלטה שממנה נכתבה השאלה היא ״ההחלטה הנכונה״.">
+      description={BUILD_MODES[mode].hint}>
+      <div className="flex flex-wrap gap-1.5">
+        {(Object.keys(BUILD_MODES) as BuildMode[]).map(m => (
+          <button key={m} className="chip" data-active={mode === m} onClick={() => setMode(m)}>{BUILD_MODES[m].label}</button>
+        ))}
+      </div>
       <div className="flex flex-wrap items-end gap-3">
         <label className="text-xs text-muted-foreground">
           מספר שאלות
@@ -97,7 +117,7 @@ export function BuildDialog({ open, agentId, budget, token, onClose, onStarted }
       </div>
       {estimate && (
         <div className="rounded-xl bg-muted/50 p-3 text-xs leading-relaxed">
-          נדגמו {num(estimate.sampled)} החלטות: {num(estimate.meta_questions)} שאלות מפרטי ההחלטה (חינם)
+          נדגמו {num(estimate.sampled)} החלטות: {num(estimate.meta_questions)} שאלות מפרטי ההחלטה ומהכותרת (חינם)
           ו-{num(estimate.llm_questions)} שיכתוב {estimate.model} — כ-{num(estimate.input_tokens)} טוקנים נכנסים
           ו-{num(estimate.output_tokens)} יוצאים.
           <p className="mt-1 text-base font-semibold text-foreground">עלות משוערת: {usdPrecise(estimate.cost_usd)}</p>

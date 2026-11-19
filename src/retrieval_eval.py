@@ -26,7 +26,7 @@ FILTER_AT = 10
 # the order the summary table prints them in; True = higher is better
 METRICS = {
     "recall@5": True, "recall@10": True, "recall@20": True, "mrr@20": True, "hit@1": True,
-    "section_hit@10": True, "distinct@10": True, "filter_acc@10": True,
+    "precision@10": True, "section_hit@10": True, "distinct@10": True, "filter_acc@10": True,
     "vector_recall@20": True, "keyword_recall@20": True, "candidate_recall@20": True,
 }
 
@@ -53,6 +53,13 @@ def mrr_at(ranking: list[str], gold: set[str], k: int = MRR_AT) -> float:
         if key in gold:
             return 1.0 / pos
     return 0.0
+
+
+def precision_at(ranking: list[str], gold: set[str], k: int = DISTINCT_AT) -> float | None:
+    """Share of the distinct decisions in the top k that are gold (topic questions,
+    whose gold is every decision that discusses the topic). None when nothing was returned."""
+    top = {key for key in ranking[:k] if key}
+    return len(top & gold) / len(top) if top else None
 
 
 def _norm(value) -> str:
@@ -107,6 +114,8 @@ def score_item(item: dict, outcome: dict) -> dict:
             out[f"recall@{k}"] = recall_at(ranking, gold, k)
         out["mrr@20"] = mrr_at(ranking, gold)
         out["hit@1"] = 1.0 if ranking[:1] and ranking[0] in gold else 0.0
+        if len(gold) > 1:
+            out["precision@10"] = precision_at(ranking, gold)
         if item.get("gold_section"):
             top = ranked(results)[:10]
             out["section_hit@10"] = 1.0 if any(

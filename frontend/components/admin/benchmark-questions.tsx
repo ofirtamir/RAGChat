@@ -5,8 +5,11 @@ import { ChevronDown, ChevronLeft, Pencil, Plus, Trash2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import {
-  deleteEvalQuestion, EvalQuestion, EvalRun, EvalSet, getEvalQuestions, QuestionPage, QuestionSource,
+  deleteEvalQuestion, EvalQuestion, EvalRun, EvalSet, getEvalQuestions, patchEvalQuestion, QuestionPage,
+  QuestionSource,
 } from "@/lib/admin-eval-api"
+
+type Verdict = "correct" | "wrong" | "unchecked"
 import { cn } from "@/lib/utils"
 import { formatMetric, ModePill, runName, SOURCE_LABEL, typeLabel } from "./benchmark-labels"
 import { selectClass } from "./filter-fields"
@@ -54,6 +57,15 @@ export function QuestionsTable({ token, set, runs, runId, onRunChange, reloadKey
       load()
     } catch (e) {
       setError(e instanceof Error ? e.message : "המחיקה נכשלה")
+    }
+  }
+
+  const verify = async (question: EvalQuestion, verified: Verdict) => {
+    try {
+      await patchEvalQuestion(question.id, { verified }, token)
+      load()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "השמירה נכשלה")
     }
   }
 
@@ -121,7 +133,11 @@ export function QuestionsTable({ token, set, runs, runId, onRunChange, reloadKey
                   </td>
                   <td className="max-w-[26rem]">
                     <p className="line-clamp-2">{row.question}</p>
-                    <p className="text-xs text-muted-foreground">{SOURCE_LABEL[row.source]}</p>
+                    <p className="text-xs text-muted-foreground">
+                      {SOURCE_LABEL[row.source]}
+                      {row.verified === true && <Pill className={cn(TONE.emerald, "ms-2")}>התשובה נבדקה: נכונה</Pill>}
+                      {row.verified === false && <Pill className={cn(TONE.red, "ms-2")}>התשובה נבדקה: שגויה</Pill>}
+                    </p>
                   </td>
                   <td className="whitespace-nowrap text-xs">{typeLabel(row.type)}</td>
                   <td className="max-w-[18rem]" onClick={e => e.stopPropagation()}>
@@ -142,6 +158,7 @@ export function QuestionsTable({ token, set, runs, runId, onRunChange, reloadKey
                 {open === row.id && (
                   <tr>
                     <td colSpan={6} className="bg-muted/40">
+                      {row.answer && <ExpectedAnswerBox row={row} onVerify={v => verify(row, v)} />}
                       <Retrieved row={row} run={runs.find(r => r.id === runId)} onOpenDoc={onOpenDoc} />
                     </td>
                   </tr>
@@ -179,6 +196,39 @@ function GoldCell({ row, onOpenDoc }: { row: EvalQuestion; onOpenDoc: (key: stri
       {!row.gold.length && meta.length > 0 && (
         <p className="truncate text-muted-foreground">תוצאות עם: {meta.map(([k, v]) => `${k}=${v}`).join(", ")}</p>
       )}
+    </div>
+  )
+}
+
+/** The answer stored with a question written from a decision, and a person's check of it. */
+function ExpectedAnswerBox({ row, onVerify }: { row: EvalQuestion; onVerify: (v: Verdict) => void }) {
+  const a = row.answer
+  if (!a) return null
+  return (
+    <div className="mx-2 mt-3 space-y-1.5 rounded-lg border bg-background px-3 py-2 text-xs">
+      <p className="font-medium">התשובה הצפויה</p>
+      {"value" in a && (
+        <>
+          <p><span className="text-muted-foreground">{a.field || "תשובה"}:</span> {a.value}</p>
+          <p className="text-muted-foreground">ציטוט מההחלטה: ״{a.quote}״</p>
+        </>
+      )}
+      {"points" in a && (
+        <ul className="list-disc space-y-0.5 ps-4">{a.points.map((p, i) => <li key={i}>{p}</li>)}</ul>
+      )}
+      {"topic" in a && (
+        <p>
+          נושא: {a.topic}{a.committee ? ` · ${a.committee}` : ""} · {num(row.gold.length)} מתוך {num(a.candidates)} ההחלטות
+          שמזכירות את הנושא אושרו כדנות בו
+        </p>
+      )}
+      <div className="flex flex-wrap items-center gap-1.5 pt-1">
+        <span className="text-muted-foreground">האם התשובה נכונה?</span>
+        <Button size="sm" variant={row.verified === true ? "default" : "outline"} className="h-7"
+          onClick={() => onVerify(row.verified === true ? "unchecked" : "correct")}>נכונה</Button>
+        <Button size="sm" variant={row.verified === false ? "default" : "outline"} className="h-7"
+          onClick={() => onVerify(row.verified === false ? "unchecked" : "wrong")}>שגויה</Button>
+      </div>
     </div>
   )
 }
