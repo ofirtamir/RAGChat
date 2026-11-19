@@ -147,6 +147,9 @@ def upsert_catalog(agent: dict, records: list[dict]) -> dict:
             )
             added += cur.rowcount
         conn.commit()
+    if added:
+        from src.filter_catalog import mark_stale
+        mark_stale(agent["id"])   # new committee/appraiser values reach the question filters
     return {"received": len(records), "added": added}
 
 
@@ -160,6 +163,14 @@ def known_keys(agent_id: str, keys: list[str]) -> set[str]:
             (agent_id, *keys),
         ).fetchall()
     return {r[0] for r in rows}
+
+
+def filter_rows(agent_id: str) -> list[tuple]:
+    """(record_key, title, meta JSON, status, chars) of every catalog row, for the
+    question-filter snapshot (src/filter_catalog.py)."""
+    with _lock, _connect() as conn:
+        return conn.execute("SELECT record_key, title, meta, status, chars FROM documents "
+                            "WHERE agent_id = ?", (agent_id,)).fetchall()
 
 
 def titles(agent_id: str, keys: list[str]) -> dict[str, str]:

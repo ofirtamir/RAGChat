@@ -331,3 +331,34 @@ def test_token_count_falls_back_to_an_estimate(monkeypatch):
     monkeypatch.setattr(src.embeddings.requests, "post", offline)
     tokens, exact = src.embeddings.count_embedding_tokens(["א" * 160])
     assert (tokens, exact) == (100, False)
+
+
+def test_indexer_maintains_once_quiet_not_after_every_document(monkeypatch):
+    import queue
+    import threading
+    import time
+
+    processed, maintained = [], []
+    monkeypatch.setattr(library_index, "process", lambda agent_id, key: processed.append(key))
+    monkeypatch.setattr(library_index, "_maintain", lambda ids: maintained.append(set(ids)))
+    monkeypatch.setattr(library_index, "MAINTAIN_AFTER_IDLE", 0.3)
+    monkeypatch.setattr(library_index, "MAINTAIN_EVERY", 5)
+    jobs = queue.Queue()
+    threading.Thread(target=library_index._run, args=(jobs,), daemon=True).start()
+
+    def wait_for(check):
+        deadline = time.monotonic() + 5
+        while not check() and time.monotonic() < deadline:
+            time.sleep(0.02)
+
+    for i in range(3):  # documents arriving one at a time, the queue drains in between
+        jobs.put(("test_agent", f"k{i}"))
+        wait_for(lambda: len(processed) == i + 1)
+        assert maintained == []
+    wait_for(lambda: maintained)
+    assert maintained == [{"test_agent"}]          # one run, after the quiet spell
+
+    for i in range(5):  # a long run is maintained every MAINTAIN_EVERY documents
+        jobs.put(("test_agent", f"m{i}"))
+    wait_for(lambda: len(maintained) == 2)
+    assert len(processed) == 8 and maintained == [{"test_agent"}] * 2

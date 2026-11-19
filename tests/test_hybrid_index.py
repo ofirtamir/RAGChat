@@ -163,12 +163,31 @@ def test_filters_apply_to_both_search_methods(index):
 def test_block_in_the_question_becomes_a_filter(index):
     hits = hybrid_index.search(AGENT, "מה נקבע בגוש 6426?", k=5)
     assert hits and {h.metadata["record_key"] for h in hits} == {"a1"}
-    assert hybrid_index.build_where(AGENT, {"Block": "100"}, "גוש 6426") == "Block = '100'"
+    # the user's own choice wins over the number in the question
+    assert hybrid_index.build_where(AGENT, {"Block": "100"}, "גוש 6426") == \
+        "regexp_like(Block, '(^|[^0-9])100([^0-9]|$)')"
+
+
+def test_a_block_stored_with_several_numbers_is_found(index):
+    index("d4", "חיפה", "7556, 8548", "2024-02-02", [(0, "1. רקע. שתי חלקות בשני גושים.")])
+    hits = hybrid_index.search(AGENT, "מה נקבע בגוש 8548?", k=5)
+    assert {h.metadata["record_key"] for h in hits} == {"d4"}
+
+
+def test_uncertain_values_only_raise_matching_rows(index):
+    from src.filter_conditions import Condition
+    from src.filter_step import FilterPlan
+
+    plan = FilterPlan(soft=[Condition("Committee", "in", ["כפר סבא"], certain=False)])
+    found = hybrid_index._hybrid(AGENT, "היטל השבחה", None, plan=plan)
+    assert {r["record_key"] for r in found["preferred"]} == {"a1"}
+    assert {"a1", "c3"} <= {found["rows"][i]["record_key"] for i, _ in found["fused"]}   # nothing removed
+    assert found["rows"][found["fused"][0][0]]["record_key"] == "a1"
 
 
 def test_quotes_in_filter_values_are_escaped():
     assert hybrid_index.build_where(AGENT, {"Committee": "תל אביב' OR 1=1"}) == \
-        "Committee = 'תל אביב'' OR 1=1'"
+        "Committee IN ('תל אביב'' OR 1=1')"
 
 
 def test_hits_expand_to_their_section_and_full_document_is_ordered(index):
@@ -214,6 +233,25 @@ def test_reindex_replaces_and_delete_removes(index):
     assert hybrid_index.record_keys(AGENT) == {"b2", "c3"}
     with pytest.raises(ValueError):
         hybrid_index.delete_document(AGENT, "x' OR '1'='1")
+
+
+def test_old_versions_do_not_pile_up_on_disk(index, tmp_path):
+    def disk_bytes():
+        return sum(p.stat().st_size for p in (tmp_path / "lancedb").rglob("*") if p.is_file())
+
+    for i in range(5):  # re-index and maintain, as the online indexer does per document
+        index("a1", "כפר סבא", "6426", "2026-07-10", [(0, f"1. רקע. גרסה {i} של ההחלטה.")])
+        hybrid_index.maintain(AGENT)
+    table = hybrid_index._table(AGENT)
+    assert len(table.list_versions()) > 1   # the last minute's versions are still kept
+    before = disk_bytes()
+
+    hybrid_index.reclaim_space([AGENT, {"id": "no_such_index", "filters": []}])
+    table = hybrid_index._table(AGENT)
+    assert len(table.list_versions()) == 1
+    assert disk_bytes() < before
+    assert hybrid_index.record_keys(AGENT) == {"a1", "b2", "c3"}
+    assert [d.metadata["record_key"] for d in hybrid_index.search(AGENT, "גרסה 4", k=1)] == ["a1"]
 
 
 # ── batch indexing ───────────────────────────────────────────────────────

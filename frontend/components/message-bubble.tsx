@@ -9,11 +9,15 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { cn } from "@/lib/utils"
 import { FileText, Search, MessageCircle, ChevronDown, ExternalLink, ThumbsUp, ThumbsDown } from "lucide-react"
 import { SourceViewer } from "@/components/source-viewer"
+import { FilterChips } from "@/components/filter-chips"
 
 interface MessageBubbleProps {
   message: Message
   /** Rate the answer (1 / -1, 0 withdraws). Shown only for answers the server logged. */
   onFeedback?: (rating: 1 | -1 | 0, comment?: string) => Promise<void>
+  /** Ask the question again without a filter found in it. */
+  onRemoveFilter?: (field: string) => void
+  busy?: boolean
 }
 
 /** 👍 / 👎 under an answer; 👎 asks (optionally) what was wrong. */
@@ -191,7 +195,7 @@ function RouteLabel({ message }: { message: Message }) {
   )
 }
 
-export function MessageBubble({ message, onFeedback }: MessageBubbleProps) {
+export function MessageBubble({ message, onFeedback, onRemoveFilter, busy }: MessageBubbleProps) {
   const [showDetails, setShowDetails] = useState(false)
   const [showThinking, setShowThinking] = useState(false)
   const [openCitation, setOpenCitation] = useState<CitationDetail | null>(null)
@@ -256,6 +260,10 @@ export function MessageBubble({ message, onFeedback }: MessageBubbleProps) {
             </ol>
           </div>
         </div>
+      )}
+
+      {message.autoFilters && (
+        <FilterChips filters={message.autoFilters} onRemove={onRemoveFilter} disabled={busy} />
       )}
 
       {/* Answer — plain text, no bubble */}

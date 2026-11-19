@@ -18,6 +18,7 @@ from langgraph.graph import StateGraph, END
 from src.router import RouteDecision
 from src.query_rewriter import create_fallback_rewrite, RewrittenQuery
 from src.query_analyzer import analyze_query, QueryAnalysis
+from src.filter_step import filters_node, step_detail as filter_step_detail
 from src.full_doc_detector import detect_full_document_need, create_fallback_full_doc_decision, FullDocDecision
 from src.planner import create_fallback_plan, QueryPlan
 from src.retriever import retrieve_for_query
@@ -44,6 +45,9 @@ class GraphState(TypedDict):
     skip_generation: bool                   # When True, LLM nodes skip generation (for streaming)
     agent_id: str | None                    # Selected agent (None = uploads store)
     filters: dict | None                    # User-selected metadata filters for the agent
+    inherited_filters: list[dict] | None    # The previous answer's filters (follow-up questions)
+    disabled_filters: list[str] | None      # Found-filter fields the user removed
+    filter_plan: object | None              # src.filter_step.FilterPlan
 
 
 def _agent_context(state: GraphState) -> tuple[str | None, dict | None]:
@@ -249,6 +253,8 @@ def check_documents_node(state: GraphState) -> dict:
 
 def full_doc_detector_node(state: GraphState) -> dict:
     """Detect whether the query needs full document retrieval."""
+    if getattr(state.get("filter_plan"), "mode", None) == "full_read":
+        return {}   # the filters already chose a few whole decisions
     try:
         agent_id, _ = _agent_context(state)
         if agent_id:
@@ -327,7 +333,8 @@ def retriever_node(state: GraphState) -> dict:
     agent_id, where = _agent_context(state)
 
     def _retrieve_one(sq: str) -> list[Document]:
-        docs = retrieve_for_query(sq, agent_id=agent_id, where=where, filters=state.get("filters"))
+        docs = retrieve_for_query(sq, agent_id=agent_id, where=where, filters=state.get("filters"),
+                                  plan=state.get("filter_plan"))
         for doc in docs:
             doc.metadata["_sub_query"] = sq
         return docs
@@ -489,7 +496,7 @@ def route_after_analyzer(state: GraphState) -> str:
 def route_after_check_documents(state: GraphState) -> str:
     if state.get("answer"):
         return END
-    return "full_doc_detector"
+    return "filters"
 
 
 def route_after_full_doc_detector(state: GraphState) -> str:
@@ -509,6 +516,7 @@ def build_rag_graph() -> StateGraph:
     workflow.add_node("analyzer", analyze_query_node)
     workflow.add_node("chitchat", chitchat_node)
     workflow.add_node("check_documents", check_documents_node)
+    workflow.add_node("filters", filters_node)
     workflow.add_node("full_doc_detector", full_doc_detector_node)
     workflow.add_node("full_doc_retriever", full_doc_retriever_node)
     workflow.add_node("retriever", retriever_node)
@@ -525,12 +533,13 @@ def build_rag_graph() -> StateGraph:
 
     workflow.add_edge("chitchat", END)
 
-    # check_documents → full_doc_detector OR END (no docs)
+    # check_documents → filters → full_doc_detector, OR END (no docs)
     workflow.add_conditional_edges(
         "check_documents",
         route_after_check_documents,
-        {"full_doc_detector": "full_doc_detector", END: END},
+        {"filters": "filters", END: END},
     )
+    workflow.add_edge("filters", "full_doc_detector")
 
     # full_doc_detector → full_doc_retriever OR retriever
     workflow.add_conditional_edges(
@@ -563,6 +572,7 @@ NODE_LABELS = {
     "analyzer":          {"label": "מנתח ומשכתב את השאילתה",   "icon": "🧭"},
     "chitchat":          {"label": "מייצר תגובת שיחה",         "icon": "💬"},
     "check_documents":   {"label": "בודק זמינות מסמכים",       "icon": "📋"},
+    "filters":           {"label": "מזהה מסננים בשאלה",        "icon": "🔎"},
     "full_doc_detector": {"label": "בודק אם נדרש מסמך מלא",   "icon": "🔍"},
     "full_doc_retriever":{"label": "מאחזר מסמך מלא",           "icon": "📄"},
     "retriever":         {"label": "מחפש מידע רלוונטי",        "icon": "🗂️"},
@@ -595,7 +605,9 @@ def _build_config(session_id: str | None, user_id: str | None, query: str,
 
 
 def _build_initial_state(query: str, chat_history: list[dict] | None, skip_generation: bool = False,
-                         agent_id: str | None = None, filters: dict | None = None) -> GraphState:
+                         agent_id: str | None = None, filters: dict | None = None,
+                         inherited_filters: list[dict] | None = None,
+                         disabled_filters: list[str] | None = None) -> GraphState:
     return {
         "query": query,
         "chat_history": chat_history or [],
@@ -609,6 +621,9 @@ def _build_initial_state(query: str, chat_history: list[dict] | None, skip_gener
         "skip_generation": skip_generation,
         "agent_id": agent_id,
         "filters": filters,
+        "inherited_filters": inherited_filters,
+        "disabled_filters": disabled_filters,
+        "filter_plan": None,
     }
 
 
@@ -622,6 +637,7 @@ def _build_result(result: dict, query: str) -> dict:
         "route": result.get("route"),
         "rewritten": result.get("rewritten"),
         "full_doc_decision": result.get("full_doc_decision"),
+        "auto_filters": result["filter_plan"].to_dict() if result.get("filter_plan") else None,
     }
 
 
@@ -633,11 +649,14 @@ def run_rag_pipeline(
     agent_id: str | None = None,
     filters: dict | None = None,
     callbacks: list | None = None,
+    inherited_filters: list[dict] | None = None,
+    disabled_filters: list[str] | None = None,
 ) -> dict:
     """Main entry point for the LangGraph RAG pipeline (non-streaming)."""
     from src.observability import start_trace_span, flush_langfuse
 
-    initial_state = _build_initial_state(query, chat_history, agent_id=agent_id, filters=filters)
+    initial_state = _build_initial_state(query, chat_history, agent_id=agent_id, filters=filters,
+                                         inherited_filters=inherited_filters, disabled_filters=disabled_filters)
     config, lf_handler = _build_config(session_id, user_id, query, callbacks)
 
     try:
@@ -738,6 +757,8 @@ def stream_rag_pipeline(
     agent_id: str | None = None,
     filters: dict | None = None,
     callbacks: list | None = None,
+    inherited_filters: list[dict] | None = None,
+    disabled_filters: list[str] | None = None,
 ):
     """
     Generator that streams pipeline progress AND LLM tokens.
@@ -749,7 +770,8 @@ def stream_rag_pipeline(
     from src.observability import start_trace_span
 
     initial_state = _build_initial_state(query, chat_history, skip_generation=True,
-                                         agent_id=agent_id, filters=filters)
+                                         agent_id=agent_id, filters=filters,
+                                         inherited_filters=inherited_filters, disabled_filters=disabled_filters)
     config, lf_handler = _build_config(session_id, user_id, query, callbacks)
 
     # LangGraph stream yields (node_name, state_update) dicts
@@ -840,6 +862,8 @@ def _get_step_detail(node_name: str, state: dict) -> str:
             elif rw and rw.rewritten_queries:
                 return " | ".join(rw.rewritten_queries[:3])
             return "נדרש אחזור מסמכים"
+        elif node_name == "filters":
+            return filter_step_detail(state.get("filter_plan"))
         elif node_name == "full_doc_detector":
             fd = state.get("full_doc_decision")
             if fd:

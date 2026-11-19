@@ -23,6 +23,12 @@ from pydantic import BaseModel
 # Add parent to path so we can import src/
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+# First, before any module opens a database: free the disk space held by old
+# index versions, so a full volume does not keep every write failing.
+from src import hybrid_index
+from src.agents import list_agents
+hybrid_index.reclaim_space(list_agents())
+
 from src.graph import run_rag_pipeline, stream_rag_pipeline
 from src.observability import initialize_langfuse
 from src import admin_store, chat_log, eval_store, library_index, sessions_store
@@ -33,6 +39,7 @@ from .admin_insights_api import router as admin_insights_router
 from .eval_api import router as eval_router
 from .feedback_api import router as feedback_router
 from .auth import access_state, get_active_user, get_active_user_id, get_current_user, require_admin
+from .chat_models import ChatRequest, ChatResponse
 
 app =FastAPI(title="RAGChat API", version="1.0.0")
 
@@ -68,30 +75,13 @@ eval_store.fail_interrupted()  # a benchmark job running when the server stopped
 _executor = ThreadPoolExecutor(max_workers=min(32, (os.cpu_count() or 4) * 4))
 
 
-class ChatRequest(BaseModel):
-    query: str
-    chat_history: list[dict] = []
-    session_id: str | None = None
-    agent_id: str | None = None
-    filters: dict | None = None
-
-
-class ChatResponse(BaseModel):
-    answer: str
-    sources: list[str]
-    citations: list[dict] = []
-    route: dict | None
-    rewritten: dict | None
-    full_doc_decision: dict | None
-    plan: dict | None
-    question_id: str | None = None
-
-
 @app.get("/api/agents")
 async def get_agents(user_id: str = Depends(get_active_user_id)):
-    """List available knowledge-base agents with their filter schemas."""
+    """List available knowledge-base agents with their filter schemas (choice lists
+    from the same value dictionary the question filters use)."""
     from src import hybrid_index
     from src.agents import list_agents
+    from src.filter_step import ui_filter_schema
     agents = []
     for agent in list_agents():
         try:
@@ -102,7 +92,7 @@ async def get_agents(user_id: str = Depends(get_active_user_id)):
             "id": agent["id"],
             "name": agent["name"],
             "description": agent.get("description", ""),
-            "filters": agent.get("filters", []),
+            "filters": ui_filter_schema(agent),
             "chunk_count": chunk_count,
         })
     return {"agents": agents}
@@ -179,8 +169,8 @@ async def chat(
             session_id=session_id,
             user_id=user_id,
             agent_id=request.agent_id,
-            filters=request.filters,
             callbacks=[usage],
+            **request.filter_args(),
         )
         ok = True
         return ChatResponse(
@@ -192,6 +182,7 @@ async def chat(
             full_doc_decision=result.get("full_doc_decision").model_dump() if result.get("full_doc_decision") else None,
             plan=result.get("plan").model_dump() if result.get("plan") else None,
             question_id=question_id,
+            auto_filters=result.get("auto_filters"),
         )
     except Exception as e:
         error = str(e)
@@ -218,12 +209,14 @@ def _run_stream_in_thread(
     user_id: str | None,
     q: Queue,
     agent_id: str | None = None,
-    filters: dict | None = None,
+    filter_args: dict | None = None,
     question_id: str | None = None,
 ):
     """Run the sync stream_rag_pipeline in a thread and push events to a queue."""
     usage, ok = _new_usage_collector(), False
     started, first_token_ms, result, error = time.monotonic(), None, None, None
+    filter_args = filter_args or {}
+    filters = filter_args.get("filters")
     try:
         for event in stream_rag_pipeline(
             query=query,
@@ -231,8 +224,8 @@ def _run_stream_in_thread(
             session_id=session_id,
             user_id=user_id,
             agent_id=agent_id,
-            filters=filters,
             callbacks=[usage],
+            **filter_args,
         ):
             if event["type"] == "token" and first_token_ms is None:
                 first_token_ms = int((time.monotonic() - started) * 1000)
@@ -280,7 +273,7 @@ async def chat_stream(
             user_id,
             q,
             request.agent_id,
-            request.filters,
+            request.filter_args(),
             question_id,
         )
 
@@ -334,6 +327,7 @@ async def chat_stream(
                     "full_doc_decision": _serialize_pydantic(data.get("full_doc_decision")),
                     "plan": _serialize_pydantic(data.get("plan")),
                     "question_id": event.get("question_id"),
+                    "auto_filters": data.get("auto_filters"),
                 }, ensure_ascii=False)
                 yield f"event: result\ndata: {result_payload}\n\n"
 

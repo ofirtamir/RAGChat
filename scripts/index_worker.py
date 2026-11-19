@@ -109,6 +109,18 @@ def repair_hard_tables(path: Path, parsed_pages, budget: int) -> dict:
     return out
 
 
+def _header_before(page, marker: str, by_number: dict) -> str | None:
+    """Header row of the table just before a picture: earlier on its page (pictures
+    already put in place included), else the last table of the previous page. A
+    picture without a header row is usually that table's continuation; the header
+    is only borrowed when the column counts match (picture_tables.tidy)."""
+    from src import picture_tables
+
+    header = picture_tables.last_header(page.markdown.split(marker, 1)[0])
+    previous = by_number.get(page.number - 1)
+    return header or (picture_tables.last_header(previous.markdown) if previous else None)
+
+
 def read_images(path: Path, parsed_pages, budget: int, defer_to: str | None = None) -> dict:
     """Put the content of pictured tables/paragraphs in place of their markers.
     Free filtering and the on-disk cache come first; at most `budget` paid calls.
@@ -118,13 +130,14 @@ def read_images(path: Path, parsed_pages, budget: int, defer_to: str | None = No
     Returns {"read", "calls", "cost_usd", "unread": [(page, problem)]}."""
     import pymupdf
 
-    from src import image_batch, image_reader
+    from src import image_batch, image_reader, picture_tables
     from src.pdf_parser import strip_image_markers
 
     out = {"read": 0, "calls": 0, "cost_usd": 0.0, "unread": []}
     images = [(p, i) for p in parsed_pages for i in p.images]
     if not images:
         return out
+    by_number = {p.number: p for p in parsed_pages}
     unavailable = None
     with pymupdf.open(path) as pdf:
         for page, image in images:
@@ -152,6 +165,7 @@ def read_images(path: Path, parsed_pages, budget: int, defer_to: str | None = No
                         out["unread"].append((page.number, "picture with text not read (Gemini unavailable)"))
             if text:
                 out["read"] += 1
+                text = picture_tables.tidy(text, _header_before(page, image.marker, by_number))
             page.markdown = page.markdown.replace(image.marker, text, 1)
     for page in parsed_pages:
         page.markdown = strip_image_markers(page.markdown)

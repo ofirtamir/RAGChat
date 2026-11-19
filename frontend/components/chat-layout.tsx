@@ -204,10 +204,25 @@ export function ChatLayout() {
     setSessions(prev => prev.map(s => s.id === id ? updater(s) : s))
   }
 
-  const handleSend = async () => {
+  const handleSend = () => {
     const query = input.trim()
     if (!query || isLoading || !activeSession || !selectedAgentId) return
     setInput("")
+    sendQuestion(query)
+  }
+
+  /** Ask again without a filter that was found in the question. */
+  const handleRemoveFilter = (assistantId: string, field: string) => {
+    const messages = activeSession?.messages ?? []
+    const idx = messages.findIndex(m => m.id === assistantId)
+    const question = [...messages.slice(0, idx)].reverse().find(m => m.role === "user")
+    if (!question || isLoading) return
+    sendQuestion(question.content, [...(messages[idx].disabledFilters ?? []), field])
+  }
+
+  const sendQuestion = async (query: string, disabledFilters: string[] = []) => {
+    if (!query || isLoading || !activeSession || !selectedAgentId) return
+    const lastAnswer = [...activeSession.messages].reverse().find(m => m.role === "assistant")
 
     const userMsg: Message = {
       id: uuidv4(), role: "user", content: query, timestamp: new Date(),
@@ -265,6 +280,7 @@ export function ChatLayout() {
         authToken,
         selectedAgentId,
         Object.keys(cleanedFilters).length > 0 ? cleanedFilters : null,
+        { inheritedFilters: lastAnswer?.autoFilters?.inherit ?? null, disabledFilters },
       )
 
       // Clear thinking/streaming state
@@ -284,6 +300,8 @@ export function ChatLayout() {
         plan: result.plan,
         thinkingSteps: [...thinkingStepsRef.current],
         questionId: result.question_id ?? null,
+        autoFilters: result.auto_filters ?? null,
+        disabledFilters,
         timestamp: new Date(),
       }
       updateSession(activeId, s => ({ ...s, messages: [...s.messages, assistantMsg] }))
@@ -416,8 +434,9 @@ export function ChatLayout() {
           <div className="scrollbar-thin flex-1 overflow-y-auto">
             <div className="mx-auto w-full max-w-3xl space-y-8 px-4 pb-10 pt-4 sm:px-6">
               {activeSession?.messages.map(msg => (
-                <MessageBubble key={msg.id} message={msg}
-                  onFeedback={(rating, comment) => handleFeedback(msg.id, rating, comment)} />
+                <MessageBubble key={msg.id} message={msg} busy={isLoading}
+                  onFeedback={(rating, comment) => handleFeedback(msg.id, rating, comment)}
+                  onRemoveFilter={field => handleRemoveFilter(msg.id, field)} />
               ))}
               {isLoading && !isStreaming && (
                 <ThinkingIndicator steps={thinkingSteps} currentNode={currentNode} />
