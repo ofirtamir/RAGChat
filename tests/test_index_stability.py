@@ -79,14 +79,20 @@ def test_a_large_library_is_recognised_without_reading_the_index(monkeypatch):
 
 # ── maintenance ──────────────────────────────────────────────────────────
 
-def test_the_index_is_maintained_when_the_indexing_queue_drains(monkeypatch):
+def test_the_index_is_maintained_once_indexing_goes_quiet(monkeypatch):
+    import time
+
     processed, maintained = [], []
     monkeypatch.setattr(library_index, "process", lambda agent_id, key: processed.append(key))
     monkeypatch.setattr(hybrid_index, "maintain", lambda agent: maintained.append(agent["id"]))
+    monkeypatch.setattr(library_index, "MAINTAIN_AFTER_IDLE", 0.2)
     library_index.enqueue(AGENT["id"], ["k1", "k2", "k3"])
     library_index._queue.join()
     assert processed == ["k1", "k2", "k3"]
-    assert maintained and set(maintained) == {AGENT["id"]}
+    deadline = time.monotonic() + 5
+    while not maintained and time.monotonic() < deadline:
+        time.sleep(0.02)
+    assert maintained == [AGENT["id"]]
 
 
 # ── failed re-index ──────────────────────────────────────────────────────
