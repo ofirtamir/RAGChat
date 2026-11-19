@@ -23,6 +23,12 @@ from pydantic import BaseModel
 # Add parent to path so we can import src/
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+# First, before any module opens a database: free the disk space held by old
+# index versions, so a full volume does not keep every write failing.
+from src import hybrid_index
+from src.agents import list_agents
+hybrid_index.reclaim_space(list_agents())
+
 from src.graph import run_rag_pipeline, stream_rag_pipeline
 from src.observability import initialize_langfuse
 from src import admin_store, chat_log, eval_store, library_index, sessions_store
