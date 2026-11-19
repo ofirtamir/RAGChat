@@ -22,7 +22,38 @@ export interface Message {
   questionId?: string | null
   /** The user's rating: 1 helpful, -1 not helpful. */
   feedback?: { rating: 1 | -1; comment?: string } | null
+  /** Filters the server found in the question (or kept from the previous answer). */
+  autoFilters?: AutoFilters | null
+  /** Found-filter fields the user removed before this answer was produced. */
+  disabledFilters?: string[]
   timestamp: Date
+}
+
+/** One filter condition, as src/filter_conditions.Condition.to_dict sends it. */
+export interface FilterCondition {
+  field: string
+  kind: "in" | "num" | "range" | "keys"
+  values: string[]
+  start?: number | null
+  end?: number | null
+  label: string
+  display: string
+  matched: string
+  source: "auto" | "manual" | "inherited"
+  certain: boolean
+}
+
+export interface AutoFilters {
+  applied: FilterCondition[]
+  /** Uncertain values: they only raise matching decisions in the ranking. */
+  preferred: FilterCondition[]
+  /** Found filters dropped because no decision matched them. */
+  dropped: FilterCondition[]
+  count: number | null
+  mode: "none" | "filtered" | "full_read" | "relaxed"
+  note: string
+  /** Sent back with the next question; a follow-up keeps these filters. */
+  inherit: FilterCondition[]
 }
 
 export interface RouteInfo {

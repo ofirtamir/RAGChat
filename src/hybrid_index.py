@@ -20,7 +20,7 @@ from datetime import timedelta
 from langchain_core.documents import Document
 
 from config import EMBEDDING_DIM, LANCEDB_DIR
-from src.hebrew_text import extract_block_plot, keyword_query, keyword_text
+from src.hebrew_text import keyword_query, keyword_text
 
 logger = logging.getLogger(__name__)
 
@@ -97,31 +97,10 @@ def _sql_str(value) -> str:
 
 
 def build_where(agent: dict, filters: dict | None, query: str = "") -> str | None:
-    """SQL filter for the agent's filter fields. Block/plot numbers named in the
-    question are added when the user did not set them."""
-    from src.agents import _date_to_int
-
-    filters = dict(filters or {})
-    names = {f["name"] for f in agent.get("filters", [])}
-    for name, value in extract_block_plot(query).items():
-        if name in names and not filters.get(name):
-            filters[name] = value
-    clauses = []
-    schema = {f["name"]: f for f in agent.get("filters", [])}
-    for name, value in filters.items():
-        field = schema.get(name)
-        if field is None or value in (None, "", {}) or name.endswith("Header"):
-            continue
-        if field["type"] == "date":
-            if not isinstance(value, dict):
-                continue
-            if value.get("from"):
-                clauses.append(f"{name}_int >= {_date_to_int(value['from'])}")
-            if value.get("to"):
-                clauses.append(f"{name}_int <= {_date_to_int(value['to'])}")
-        else:
-            clauses.append(f"{name} = {_sql_str(str(value).strip())}")
-    return " AND ".join(clauses) or None
+    """SQL filter for the user's filters plus the certain ones found in the
+    question (src/filter_step)."""
+    from src.filter_step import plan_filters
+    return plan_filters(agent, query, filters).where
 
 
 # ── writing ──────────────────────────────────────────────────────────────
@@ -285,16 +264,23 @@ def chunks_for_source(agent: dict, source: str) -> list[Document]:
     return [_to_document(r) for r in sorted(rows, key=lambda r: (r["record_key"], r["chunk_index"]))]
 
 
-def _hybrid(agent: dict, query: str, filters: dict | None, strict: bool = True) -> dict:
+def _hybrid(agent: dict, query: str, filters: dict | None, strict: bool = True, plan=None) -> dict:
     """Run both searches and fuse them. With strict=False a failing search is
-    reported in `errors` instead of raised (the admin search lab)."""
-    from src.embeddings import embed_query
+    reported in `errors` instead of raised (the admin search lab).
 
-    out = {"semantic": [], "keyword": [], "fused": [], "rows": {}, "errors": {}, "where": None}
+    `plan` (src/filter_step.FilterPlan) holds the filters; without one it is made
+    from the user's filters and `query`. Its uncertain values add a third,
+    "preferred" ranking: the semantic search again, limited to matching rows."""
+    from src.embeddings import embed_query
+    from src.filter_step import plan_filters
+
+    out = {"semantic": [], "keyword": [], "preferred": [], "fused": [], "rows": {}, "errors": {},
+           "where": None, "plan": None}
     table = _table(agent)
     if table is None or not query.strip():
         return out
-    where = out["where"] = build_where(agent, filters, query)
+    plan = out["plan"] = plan or plan_filters(agent, query, filters)
+    where = out["where"] = plan.where
     scores: dict[str, float] = {}
 
     def add(name: str, results: list[dict]) -> None:
@@ -304,10 +290,15 @@ def _hybrid(agent: dict, query: str, filters: dict | None, strict: bool = True) 
         out[name] = results
 
     try:
-        vq = table.search(embed_query(query), vector_column_name="vector").distance_type("cosine")
+        vector = embed_query(query)
+        vq = table.search(vector, vector_column_name="vector").distance_type("cosine")
         if where:
             vq = vq.where(where, prefilter=True)
         add("semantic", vq.limit(CANDIDATES).to_list())
+        if plan.soft_where:
+            pq = table.search(vector, vector_column_name="vector").distance_type("cosine")
+            preferred = f"({where}) AND ({plan.soft_where})" if where else plan.soft_where
+            add("preferred", pq.where(preferred, prefilter=True).limit(CANDIDATES).to_list())
     except Exception as exc:
         if strict:
             raise
@@ -329,9 +320,9 @@ def _hybrid(agent: dict, query: str, filters: dict | None, strict: bool = True) 
     return out
 
 
-def search(agent: dict, query: str, filters: dict | None = None, k: int = 20) -> list[Document]:
+def search(agent: dict, query: str, filters: dict | None = None, k: int = 20, plan=None) -> list[Document]:
     """Hybrid search: semantic + lexical, same filters, fused by reciprocal rank."""
-    found = _hybrid(agent, query, filters)
+    found = _hybrid(agent, query, filters, plan=plan)
     return [_to_document(found["rows"][i], score) for i, score in found["fused"][:k]]
 
 
@@ -339,6 +330,7 @@ def search_stages(agent: dict, query: str, filters: dict | None = None, k: int =
     """search(), with every stage laid out for the admin search lab: where each
     chunk ranked in the semantic and keyword lists, its raw scores, and the fused order."""
     found = _hybrid(agent, query, filters, strict=False)
+    plan = found.get("plan")
     sem_rank = {r["id"]: (i + 1, r.get("_distance")) for i, r in enumerate(found["semantic"])}
     kw_rank = {r["id"]: (i + 1, r.get("_score")) for i, r in enumerate(found["keyword"])}
     rows = []
@@ -353,7 +345,7 @@ def search_stages(agent: dict, query: str, filters: dict | None = None, k: int =
             **{f: row.get(f) for f in ("record_key", "source", "page", "section", "chunk_index", "text")},
         })
     return {"rows": rows, "errors": found["errors"], "where": found["where"],
-            "keyword_terms": found.get("terms", ""),
+            "keyword_terms": found.get("terms", ""), "filters": plan.to_dict() if plan else None,
             "semantic_count": len(found["semantic"]), "keyword_count": len(found["keyword"])}
 
 

@@ -1,5 +1,5 @@
 import { getSession as getAuthSession } from "next-auth/react"
-import { CitationDetail, ThinkingStep } from "@/types/chat"
+import { AutoFilters, CitationDetail, FilterCondition, ThinkingStep } from "@/types/chat"
 import { redirectToSignIn } from "@/lib/auth-redirect"
 
 // Backend base URL (override via NEXT_PUBLIC_BACKEND_ORIGIN, e.g. http://localhost:8000)
@@ -18,6 +18,14 @@ export interface ChatApiResponse {
   full_doc_decision: { needs_full_document: boolean; target_sources: string[]; reasoning: string } | null
   plan: { is_complex: boolean; sub_queries: string[]; reasoning: string } | null
   question_id?: string | null
+  auto_filters?: AutoFilters | null
+}
+
+/** Filter state carried between turns: the previous answer's filters (kept by a
+ *  follow-up question) and the found-filter fields the user removed. */
+export interface FilterCarry {
+  inheritedFilters?: FilterCondition[] | null
+  disabledFilters?: string[]
 }
 
 /**
@@ -156,6 +164,7 @@ export async function sendMessageStreaming(
   token: string | undefined,
   agentId?: string | null,
   filters?: AgentFilters | null,
+  carry?: FilterCarry,
 ): Promise<ChatApiResponse> {
   const res = await authFetch(`${API_BASE}/chat/stream`, token, {
     method: "POST",
@@ -166,6 +175,8 @@ export async function sendMessageStreaming(
       session_id: sessionId,
       agent_id: agentId || null,
       filters: filters || null,
+      inherited_filters: carry?.inheritedFilters?.length ? carry.inheritedFilters : null,
+      disabled_filters: carry?.disabledFilters ?? [],
     }),
   })
 

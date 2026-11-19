@@ -27,7 +27,8 @@ def get_retriever(k: int = RETRIEVER_CANDIDATES, agent_id: str | None = None,
 
 
 def retrieve_for_query(query: str, agent_id: str | None = None,
-                       where: dict | None = None, filters: dict | None = None) -> list[Document]:
+                       where: dict | None = None, filters: dict | None = None,
+                       plan=None) -> list[Document]:
     """Retrieve and rerank relevant documents for a single query string.
 
     Agents (document libraries): hybrid search — semantic + keyword, with the
@@ -39,7 +40,7 @@ def retrieve_for_query(query: str, agent_id: str | None = None,
         from src.agents import get_agent
 
         agent = get_agent(agent_id)
-        candidates = hybrid_index.search(agent, query, filters, k=RETRIEVER_CANDIDATES)
+        candidates = hybrid_index.search(agent, query, filters, k=RETRIEVER_CANDIDATES, plan=plan)
         top = rerank_documents(query, candidates, top_k=RETRIEVER_K)
         return hybrid_index.expand_to_sections(agent, top)
     retriever = get_retriever(where=where)
