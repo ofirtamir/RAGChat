@@ -242,6 +242,14 @@ def test_follow_up_keeps_the_previous_filters(ctx):
     assert plan.mode == "none"                           # a new question starts clean
 
 
+def test_a_preference_most_decisions_share_is_dropped(ctx):
+    # every decision in ROWS is "היטל השבחה": preferring it would only reshuffle the ranking
+    plan = filter_step.plan_filters(AGENT, "כיצד יש לחלק את חבות היטל ההשבחה במכר", ctx=ctx)
+    assert not plan.soft and plan.soft_where is None
+    plan = filter_step.plan_filters(AGENT, "החלטות ברעננא", ctx=ctx)   # a narrow preference stays
+    assert [c.values for c in plan.soft] == [["רעננה"]]
+
+
 def test_without_a_catalog_snapshot_found_filters_still_apply():
     empty = filter_catalog.build_context(AGENT, [])
     plan = filter_step.plan_filters(AGENT, "החלטות בבית שאן", ctx=empty)

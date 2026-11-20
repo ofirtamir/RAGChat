@@ -23,6 +23,7 @@ logger = logging.getLogger(__name__)
 
 FULL_READ_MAX = 3
 FULL_READ_MAX_CHARS = 90_000
+SOFT_MAX_SHARE = 0.3        # a preference matching more of the decisions than this is dropped
 FOLLOW_UP_CUES = frozenset(normalize(w) for w in "אותה אותו אותן אותם הנל הזו הזאת הזה ההיא ההוא שם".split())
 
 
@@ -68,6 +69,16 @@ def is_follow_up(query: str) -> bool:
     return False
 
 
+def _narrow(ctx: filter_catalog.Context, conditions: list[Condition]) -> list[Condition]:
+    """Preferences worth keeping: a value most decisions share ("היטל השבחה" is
+    ~98% of them) says nothing about the question and only reshuffles the ranking
+    (benchmark, 2026-11-20)."""
+    if not ctx.has_index:
+        return conditions
+    limit = SOFT_MAX_SHARE * len(ctx.records)
+    return [c for c in conditions if len(ctx.matching([c])) <= limit]
+
+
 def _names(conditions: list[Condition]) -> str:
     return ", ".join(f"{c.label}: {c.display}" for c in conditions)
 
@@ -86,7 +97,7 @@ def plan_filters(agent: dict, query: str, filters: dict | None = None,
         found = query_filters.Detection()
     auto = [c for c in found.hard if c.field not in taken]
     taken |= {c.field for c in auto}
-    soft = [c for c in found.soft if c.field not in taken]
+    soft = _narrow(ctx, [c for c in found.soft if c.field not in taken])
     if inherited and is_follow_up(query):
         for data in inherited:
             c = from_dict(agent, data)
@@ -104,7 +115,7 @@ def plan_filters(agent: dict, query: str, filters: dict | None = None,
     plan.count = len(keys)
     if not keys:
         plan.dropped, plan.hard = auto, manual
-        plan.soft = soft + [c for c in auto if c.kind != "keys" or len(c.values) <= 1000]
+        plan.soft = soft + _narrow(ctx, [c for c in auto if c.kind != "keys" or len(c.values) <= 1000])
         plan.count = len(ctx.matching(manual)) if manual else None
         plan.mode = "relaxed"
         plan.note = f"לא נמצאו החלטות שמתאימות ל{_names(auto)}, ולכן החיפוש נעשה בלי הסינון הזה."
