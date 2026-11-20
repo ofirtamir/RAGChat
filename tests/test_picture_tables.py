@@ -36,6 +36,16 @@ def test_a_continuation_borrows_the_previous_header_or_gets_an_empty_one():
     assert alone[0] == "|  |  |  |  |  |  |" and len(alone) == 4
 
 
+def test_a_data_row_promoted_to_header_is_kept_as_data():
+    hint = pt.last_header(pt.tidy(FIRST))
+    promoted = (f"{LABEL}\n\n| 5 | ב' | 44.73 מ\"ר | מכר | אבי | 2018 |\n| --- | --- | --- | --- | --- | --- |\n"
+                "| 6 | ב' | 44.94 מ\"ר | מכר | רון | 2019 |")
+    out = rows(pt.tidy(promoted, hint))
+    assert out[0] == hint and out[2].startswith("| 5 |") and out[3].startswith("| 6 |")
+    assert not pt.looks_like_data(["חלקת משנה", "קומה", "שטח", "2017"])
+    assert pt.looks_like_data(["5", "ב'", "44.73", "2018"])
+
+
 def test_text_without_tables_and_tidy_tables_are_left_alone():
     text = f"{LABEL}\n\nפסקה רגילה עם 12 מייר וקו | באמצע."
     assert pt.tidy(text) == text.replace("12 מייר", '12 מ"ר')

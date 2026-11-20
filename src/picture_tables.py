@@ -7,7 +7,8 @@ repairs documents for free:
 - a table with no header row (the picture continues a table from the previous
   picture or page) gets the previous table's header when the columns match, or
   an empty header: without the "|---|" line, Markdown shows the rows as one
-  run-on paragraph and the chunker does not see a table;
+  run-on paragraph and the chunker does not see a table. A "header" made of
+  numbers is a data row the model promoted, and is treated the same way;
 - the header and every row are padded to the widest row, so no cell is dropped
   when the model reads one column more in the rows than in the header;
 - "מייר" after a number is the model's reading of מ"ר (square metres).
@@ -18,6 +19,8 @@ import re
 
 _SEPARATOR = re.compile(r"^\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)*\|?\s*$")
 _SQM = re.compile(r"(\d)\s*מייר")
+# a value, not a label: a number, share, date, sum or area ("44/792", "1/2", "₪ 17,900", "44.73 מ\"ר", "8.66%")
+_NUMERIC = re.compile(r"[₪$]?\s*[\d][\d.,/\-]*\s*(%|₪|מ\"ר|מ״ר|מייר|ש\"ח)?")
 
 
 def _is_row(line: str) -> bool:
@@ -46,10 +49,19 @@ def last_header(markdown: str) -> str | None:
     return None
 
 
+def looks_like_data(cells: list[str]) -> bool:
+    """A "header" that is really a data row: the model marks the first row of a
+    continued table as its header. Real headers are words; data rows are mostly numbers."""
+    filled = [c for c in cells if c]
+    return len(filled) >= 2 and sum(bool(_NUMERIC.fullmatch(c)) for c in filled) * 2 >= len(filled)
+
+
 def _tidy_table(block: list[str], hint: str | None) -> list[str]:
     has_header = len(block) >= 2 and bool(_SEPARATOR.match(block[1].strip()))
     rows = [_cells(r) for r in (block[2:] if has_header else block) if not _SEPARATOR.match(r.strip())]
     header = _cells(block[0]) if has_header else None
+    if header is not None and looks_like_data(header):
+        rows, header = [header] + rows, None
     width = max([len(r) for r in rows] + ([len(header)] if header else []))
     if header is None:
         borrowed = _cells(hint) if hint else []
