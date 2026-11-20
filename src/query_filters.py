@@ -6,11 +6,13 @@
   A word is tried as written first; prefix letters are removed only when the
   shorter word starts a known value (src/hebrew_match). Longer matches win.
 - Party names: words of the decision titles (src/filter_catalog), with the same
-  prefix rule.
+  prefix rule, and only next to "נ'", "נגד", "בעניין"… — ordinary words occur in
+  some title too.
 
 Every match is either certain (a hard filter) or uncertain (only preferred in
-ranking): a family name several appraisers share, a committee name that is also
-an everyday word with no "ועדה" next to it, a single typo, a lone party word.
+ranking): a family name several appraisers share without "שמאי" before it, or a
+single typo. A committee name that is also an everyday word ("אזור", "רחובות")
+counts only with "ועדה" or similar before it.
 """
 from __future__ import annotations
 
@@ -39,16 +41,16 @@ _BEFORE_WORDS = ("לפני",)
 COMMITTEE_CUES = frozenset(normalize(w) for w in
                            "ועדה ועדת מקומית מחוזית לתכנון תכנון ובניה בניה עירית עיריית מועצה אזורית".split())
 APPRAISER_CUES = frozenset(normalize(w) for w in "שמאי שמאית מכריע מכריעה".split())
-PARTY_CUES = frozenset(normalize(w) for w in "נ נגד בעניין עורר עוררת עוררים מבקש מבקשת".split())
+PARTY_CUES = frozenset(normalize(w) for w in "נ נגד בעניין".split())
 QUESTION_STOP = frozenset(normalize(w) for w in """
     מה מי איך האם למה כמה איזה אילו של על את עם לגבי בין כל יש אין גם או אם כי זה זו זאת הוא היא
     החלטה החלטות הכרעה הכרעות שמאי שמאים שומה שומות שווי היטל השבחה פיצויים הפקעה דירה דירות
     מגרש מגרשים בית בתים קרקע זכויות בניה תכנית תוכנית מקדם מקדמים נכס נכסים ועדה מקומית עסקה עסקאות
     נקבע נקבעו קבע קבעה פסק פסקה מכריע מכריעה תביעה תביעות ערר ממוצע שיעור שנה שנים
     יום מיום תאריך מרכז צפון דרום מזרח מערב עיר רחוב שכונה שכונת אזור מקרה מקרים דין
+    בגין עבור לפי ידי כאשר קיים קיימת ניתן מבקש מבקשת עורר עוררת משיב משיבה נישום
 """.split())
 PARTY_MAX_KEYS = 300
-PARTY_SOFT_MAX = 50
 _KIND_RANK = {"full": 0, "article": 0, "surname": 1, "partial": 2}
 
 
@@ -215,8 +217,9 @@ def _value_conditions(toks: list[str], ctx: Context) -> tuple[list[Condition], l
         if kind == "surname":
             entities = {e.key: e for e in vocab.surname_entities(m.phrases[0])}
         certain = not m.fuzzy and kind != "partial"
-        if certain and f == "Committee" and m.end - m.start == 1 and m.phrases[0].entity.key in AMBIGUOUS_WORDS:
-            certain = _cue_before(toks, m.start, COMMITTEE_CUES)
+        if f == "Committee" and m.end - m.start == 1 and m.phrases[0].entity.key in AMBIGUOUS_WORDS:
+            if not _cue_before(toks, m.start, COMMITTEE_CUES):
+                continue   # an everyday word ("לאזור", "ברחובות דוד ילין"), not the committee
         if certain and kind == "surname":
             certain = _cue_before(toks, m.start, APPRAISER_CUES)
         target = hard if certain else soft
@@ -227,7 +230,8 @@ def _value_conditions(toks: list[str], ctx: Context) -> tuple[list[Condition], l
         if f in target:
             c = target[f]
             c.values = sorted(set(c.values) | set(values))
-            c.display += f", {display}"
+            if display not in c.display.split(", "):
+                c.display += f", {display}"
             c.matched += f" {matched}"
         else:
             target[f] = Condition(f, "in", values, label=vocab.fields.get(f, f), display=display,
@@ -246,12 +250,21 @@ def _party_conditions(toks: list[str], covered: set[int], ctx: Context) -> tuple
     for i, tok in enumerate(toks):
         if i in covered or tok.isdigit() or tok in QUESTION_STOP or tok in PARTY_CUES or tok in ctx.vocab.words:
             continue
+        if any(r in QUESTION_STOP for _, r in prefix_splits(tok)):   # "ושמאי", "בבניה"
+            continue
         options = forms(tok, ctx.party)
         form = tok if tok in ctx.party else (options[1][0] if len(options) > 1 else None)
         if not form or len(form) < 3 or form in QUESTION_STOP:
             continue
         hits[i] = ctx.party[form]
-    hard, soft = [], []
+    def is_cue(k: int) -> bool:
+        return 0 <= k < len(toks) and (toks[k] in PARTY_CUES or
+                                       any(r in PARTY_CUES for _, r in prefix_splits(toks[k])))
+
+    # Only words next to "נ'", "נגד", "בעניין"… count as a party name. Ordinary words
+    # ("בגין", "קיים כאשר") also occur in some title, so without a cue they are not
+    # evidence of a party (measured on the benchmark set, 2026-11-19).
+    hard = []
     i = 0
     while i < len(toks):
         if i not in hits:
@@ -262,16 +275,11 @@ def _party_conditions(toks: list[str], covered: set[int], ctx: Context) -> tuple
         while j + 1 in hits and keys & hits[j + 1]:
             j += 1
             keys &= hits[j]
-        words = readable(" ".join(toks[i:j + 1]))
-        cue = (i > 0 and toks[i - 1] in PARTY_CUES) or (j + 1 < len(toks) and toks[j + 1] in PARTY_CUES)
-        c = Condition(KEYS_FIELD, "keys", sorted(keys), label="צד", display=words, matched=words)
-        if keys and len(keys) <= PARTY_MAX_KEYS and (j > i or cue):
-            hard.append(c)
-        elif keys and len(keys) <= PARTY_SOFT_MAX:
-            c.certain = False
-            soft.append(c)
+        if keys and len(keys) <= PARTY_MAX_KEYS and (is_cue(i - 1) or is_cue(j + 1)):
+            words = readable(" ".join(toks[i:j + 1]))
+            hard.append(Condition(KEYS_FIELD, "keys", sorted(keys), label="צד", display=words, matched=words))
         i = j + 1
-    return hard, soft
+    return hard, []
 
 
 def detect(agent: dict, query: str, ctx: Context) -> Detection:
