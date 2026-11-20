@@ -459,7 +459,7 @@ export function ChatLayout() {
         {/* Composer: centred under the greeting while empty, docked at the bottom after.
             It stays at the same place in the tree so its state survives the first message. */}
         <div className="shrink-0 px-3 pb-3 sm:px-4">
-          <div className="mx-auto w-full max-w-3xl">
+          <div className="mx-auto w-full max-w-4xl">
             {composer}
             {isEmpty ? (
               <Suggestions onPick={q => { setInput(q); inputRef.current?.focus() }} />

@@ -47,8 +47,8 @@ export function FilterMatches({ agentId, filters }: { agentId: string; filters: 
         : `${data.count.toLocaleString()} החלטות מתאימות מתוך ${data.total.toLocaleString()}`
 
   return (
-    <div className="mt-3 border-t pt-3">
-      <div className="flex items-center gap-2">
+    <div className="mt-3 flex min-h-0 flex-col border-t pt-3">
+      <div className="flex shrink-0 items-center gap-2">
         <p className={cn("flex flex-1 items-center gap-1.5 text-sm", loading && data && "opacity-60")} aria-live="polite">
           {loading && <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-muted-foreground" />}
           <span className={cn(data?.count === 0 && "text-destructive")}>{summary}</span>
@@ -68,7 +68,7 @@ export function FilterMatches({ agentId, filters }: { agentId: string; filters: 
 
       {showList && data && data.count > 0 && (
         <>
-          <ul className="scrollbar-thin mt-2 max-h-64 divide-y overflow-y-auto rounded-xl border">
+          <ul className="scrollbar-thin mt-2 min-h-[7.5rem] divide-y overflow-y-auto rounded-xl border">
             {data.documents.map(d => (
               <li key={d.key}>
                 <button
@@ -86,7 +86,7 @@ export function FilterMatches({ agentId, filters }: { agentId: string; filters: 
             ))}
           </ul>
           {data.count > data.documents.length && data.documents.length > 0 && (
-            <p className="mt-1.5 text-xs text-muted-foreground">
+            <p className="mt-1.5 shrink-0 text-xs text-muted-foreground">
               מוצגות {data.documents.length.toLocaleString()} ההחלטות החדשות ביותר. אפשר לצמצם עם מסננים נוספים.
             </p>
           )}

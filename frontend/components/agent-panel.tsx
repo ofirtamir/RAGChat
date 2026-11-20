@@ -197,9 +197,9 @@ export function AgentPanel({
         <div
           ref={cardRef}
           style={{ maxHeight: cardMaxHeight }}
-          className="scrollbar-thin absolute inset-x-0 bottom-full z-30 mb-2 overflow-y-auto rounded-3xl border bg-background p-4 shadow-[0_4px_24px_rgba(0,0,0,0.08)] animate-fadeIn dark:bg-popover"
+          className="scrollbar-thin absolute inset-x-0 bottom-full z-30 mb-2 flex flex-col overflow-y-auto rounded-3xl border bg-background p-4 shadow-[0_4px_24px_rgba(0,0,0,0.08)] animate-fadeIn dark:bg-popover"
         >
-          <div className="mb-3 flex items-center gap-2">
+          <div className="mb-3 flex shrink-0 items-center gap-2">
             <p className="flex-1 truncate text-sm font-medium">סינון · {agent.name}</p>
             {activeCount > 0 && (
               <button
@@ -219,9 +219,9 @@ export function AgentPanel({
               <X className="h-4 w-4" />
             </button>
           </div>
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <div className="grid shrink-0 grid-cols-1 gap-x-3 gap-y-2.5 sm:grid-cols-2 lg:grid-cols-4">
             {agent.filters.map(field => (
-              <div key={field.name} className="min-w-0">
+              <div key={field.name} className={cn("min-w-0", field.type === "date" && "sm:col-span-2")}>
                 <label className="mb-1 block text-xs text-muted-foreground">{field.label}</label>
                 {field.type === "choice" ? (
                   <select
