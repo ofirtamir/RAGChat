@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useEffect, useLayoutEffect, useRef, useState } from "react"
 import { AgentInfo, AgentFilters } from "@/lib/api"
 import { Input } from "@/components/ui/input"
 import {
@@ -35,7 +35,9 @@ function countActiveFilters(filters: AgentFilters): number {
 const fieldClass =
   "h-9 w-full rounded-lg border border-input bg-background px-2.5 text-sm transition-colors focus-visible:border-ring focus-visible:outline-none"
 
-type DateValue = { from?: string; to?: string }
+const CARD_TOP_GAP = 72   // px kept free above the filters card (the top bar and a margin)
+
+type DateValue ={ from?: string; to?: string }
 
 /** YYYY-MM-DD in local time (what <input type="date"> holds). */
 function isoDay(d: Date): string {
@@ -132,6 +134,43 @@ export function AgentPanel({
   action,
 }: AgentPanelProps) {
   const [showFilters, setShowFilters] = useState(false)
+  const [cardMaxHeight, setCardMaxHeight] = useState<number | undefined>(undefined)
+  const rootRef = useRef<HTMLDivElement>(null)
+  const cardRef = useRef<HTMLDivElement>(null)
+  const filterButtonRef = useRef<HTMLButtonElement>(null)
+
+  // The card may use the space between the top of the window and the pill.
+  useLayoutEffect(() => {
+    if (!showFilters) return
+    const fit = () => {
+      const top = rootRef.current?.getBoundingClientRect().top ?? window.innerHeight
+      setCardMaxHeight(Math.max(200, top - CARD_TOP_GAP))
+    }
+    fit()
+    window.addEventListener("resize", fit)
+    return () => window.removeEventListener("resize", fit)
+  }, [showFilters])
+
+  // A click outside the card (or Escape) closes it; not while a document opened from it is showing.
+  useEffect(() => {
+    if (!showFilters) return
+    const dialogOpen = () => document.querySelector('[role="dialog"]') !== null
+    const onPointerDown = (e: PointerEvent) => {
+      const target = e.target as Node
+      if (cardRef.current?.contains(target) || filterButtonRef.current?.contains(target) || dialogOpen()) return
+      setShowFilters(false)
+    }
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !dialogOpen()) setShowFilters(false)
+    }
+    document.addEventListener("pointerdown", onPointerDown)
+    document.addEventListener("keydown", onKeyDown)
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown)
+      document.removeEventListener("keydown", onKeyDown)
+    }
+  }, [showFilters])
+
   const agent = agents.find(a => a.id === selectedAgentId) ?? null
   const activeCount = countActiveFilters(filters)
   const hasFilters = Boolean(agent && agent.filters.length > 0)
@@ -152,10 +191,14 @@ export function AgentPanel({
   }
 
   return (
-    <div className="w-full" dir="rtl">
-      {/* Filters card */}
+    <div ref={rootRef} className="relative w-full" dir="rtl">
+      {/* Filters card: floats above the pill and scrolls inside, so the pill stays on screen */}
       {agent && hasFilters && showFilters && (
-        <div className="mb-2 rounded-3xl border bg-background p-4 shadow-[0_4px_24px_rgba(0,0,0,0.06)] animate-fadeIn dark:bg-popover">
+        <div
+          ref={cardRef}
+          style={{ maxHeight: cardMaxHeight }}
+          className="scrollbar-thin absolute inset-x-0 bottom-full z-30 mb-2 overflow-y-auto rounded-3xl border bg-background p-4 shadow-[0_4px_24px_rgba(0,0,0,0.08)] animate-fadeIn dark:bg-popover"
+        >
           <div className="mb-3 flex items-center gap-2">
             <p className="flex-1 truncate text-sm font-medium">סינון · {agent.name}</p>
             {activeCount > 0 && (
@@ -252,6 +295,7 @@ export function AgentPanel({
 
         {hasFilters && (
           <button
+            ref={filterButtonRef}
             type="button"
             onClick={() => setShowFilters(s => !s)}
             className={cn(
