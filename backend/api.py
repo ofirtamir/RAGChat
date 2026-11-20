@@ -403,6 +403,26 @@ async def delete_user_session(
     return {"status": "deleted"}
 
 
+class MatchingRequest(BaseModel):
+    filters: dict | None = None
+    limit: int = 0          # 0: the count only; otherwise the newest documents too
+
+
+MATCHING_LIST_MAX = 300
+
+
+@app.post("/api/agents/{agent_id}/matching")
+def matching_documents(agent_id: str, req: MatchingRequest, _user: dict = Depends(get_active_user)):
+    """How many decisions the filter panel's choices leave, and (with `limit`) which."""
+    from src.agents import get_agent
+    from src.filter_step import matching_documents as match
+
+    _require_agent(agent_id)
+    if req.filters is not None and len(req.filters) > 50:
+        raise HTTPException(status_code=400, detail="Too many filters")
+    return match(get_agent(agent_id), req.filters, max(0, min(req.limit, MATCHING_LIST_MAX)))
+
+
 @app.get("/api/sources/{agent_id}/{key}")
 def get_source_document(agent_id: str, key: str, _user: dict = Depends(get_active_user)):
     """A cited library document as the parser saw it, plus links to the original

@@ -16,7 +16,7 @@ import logging
 from dataclasses import dataclass, field
 
 from src import filter_catalog, filter_values, query_filters
-from src.filter_conditions import KEYS_FIELD, Condition, any_sql, from_dict, from_manual, where_sql
+from src.filter_conditions import KEYS_FIELD, Condition, any_sql, date_int, from_dict, from_manual, where_sql
 from src.hebrew_match import normalize, prefix_splits
 
 logger = logging.getLogger(__name__)
@@ -145,6 +145,24 @@ def filters_node(state: dict) -> dict:
     if plan.mode == "full_read":
         out["full_doc_decision"] = FullDocDecision(needs_full_document=True, target_sources=plan.sources,
                                                    reasoning=plan.note)
+    return out
+
+
+def matching_documents(agent: dict, filters: dict | None, limit: int = 0) -> dict:
+    """How many indexed decisions the filter panel's choices leave and, with
+    limit > 0, the newest of them — shown under the panel. Catalog only, free."""
+    ctx = filter_catalog.get_context(agent)
+    manual = from_manual(agent, filters, lambda f, v: filter_values.stored_forms(ctx.vocab, f, v))
+    keys = ctx.matching(manual)
+    out = {"count": len(keys), "total": len(ctx.records), "documents": []}
+    if limit <= 0 or not keys:
+        return out
+    dates = [f["name"] for f in agent.get("filters", []) if f.get("type") == "date"][::-1]
+    stamp = lambda k: tuple(date_int(ctx.records[k].get(d)) or 0 for d in dates)  # noqa: E731
+    for key in sorted(keys, key=stamp, reverse=True)[:limit]:
+        day = next((x for x in stamp(key) if x), None)
+        out["documents"].append({"key": key, "title": ctx.sources.get(key, key),
+                                 "date": f"{day % 100:02d}.{day // 100 % 100:02d}.{day // 10000}" if day else None})
     return out
 
 

@@ -12,6 +12,7 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { Check, ChevronDown, Library, SlidersHorizontal, X } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { FilterMatches } from "@/components/filter-matches"
 
 interface AgentPanelProps {
   agents: AgentInfo[]
@@ -33,6 +34,88 @@ function countActiveFilters(filters: AgentFilters): number {
 
 const fieldClass =
   "h-9 w-full rounded-lg border border-input bg-background px-2.5 text-sm transition-colors focus-visible:border-ring focus-visible:outline-none"
+
+type DateValue = { from?: string; to?: string }
+
+/** YYYY-MM-DD in local time (what <input type="date"> holds). */
+function isoDay(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`
+}
+
+function yearsBack(years: number): DateValue {
+  const now = new Date()
+  const start = new Date(now)
+  start.setFullYear(now.getFullYear() - years)
+  return { from: isoDay(start), to: isoDay(now) }
+}
+
+const DATE_PRESETS: { label: string; range: () => DateValue }[] = [
+  { label: "השנה", range: () => ({ from: `${new Date().getFullYear()}-01-01`, to: isoDay(new Date()) }) },
+  { label: "שנה אחרונה", range: () => yearsBack(1) },
+  { label: "3 שנים", range: () => yearsBack(3) },
+  { label: "5 שנים", range: () => yearsBack(5) },
+]
+
+/** A "from – to" date pair with labels and one-click ranges. */
+function DateRange({ value, onChange }: { value: DateValue; onChange: (v: DateValue) => void }) {
+  const reversed = Boolean(value.from && value.to && value.from > value.to)
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-end gap-1.5">
+        <label className="min-w-0 flex-1">
+          <span className="mb-0.5 block text-[11px] text-muted-foreground">מתאריך</span>
+          <Input
+            type="date"
+            value={value.from ?? ""}
+            max={value.to || undefined}
+            onChange={e => onChange({ ...value, from: e.target.value })}
+            className="text-sm"
+          />
+        </label>
+        <span className="pb-2 text-muted-foreground" aria-hidden>–</span>
+        <label className="min-w-0 flex-1">
+          <span className="mb-0.5 block text-[11px] text-muted-foreground">עד תאריך</span>
+          <Input
+            type="date"
+            value={value.to ?? ""}
+            min={value.from || undefined}
+            onChange={e => onChange({ ...value, to: e.target.value })}
+            className="text-sm"
+          />
+        </label>
+      </div>
+      <div className="flex flex-wrap items-center gap-1">
+        {DATE_PRESETS.map(p => {
+          const range = p.range()
+          const active = value.from === range.from && value.to === range.to
+          return (
+            <button
+              key={p.label}
+              type="button"
+              onClick={() => onChange(active ? {} : range)}
+              className={cn(
+                "rounded-full border px-2 py-0.5 text-[11px] transition-colors hover:bg-accent",
+                active ? "border-foreground bg-foreground text-background hover:bg-foreground/90" : "text-muted-foreground",
+              )}
+            >
+              {p.label}
+            </button>
+          )
+        })}
+        {(value.from || value.to) && (
+          <button
+            type="button"
+            onClick={() => onChange({})}
+            className="rounded-full px-2 py-0.5 text-[11px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          >
+            ניקוי
+          </button>
+        )}
+      </div>
+      {reversed && <p className="text-[11px] text-destructive">תאריך ההתחלה מאוחר מתאריך הסיום</p>}
+    </div>
+  )
+}
 
 /**
  * The chat composer: one rounded "pill" holding the knowledge-base picker,
@@ -109,22 +192,7 @@ export function AgentPanel({
                     ))}
                   </select>
                 ) : field.type === "date" ? (
-                  <div className="flex gap-1.5">
-                    <Input
-                      type="date"
-                      value={dateVal(field.name).from ?? ""}
-                      onChange={e => setField(field.name, { ...dateVal(field.name), from: e.target.value })}
-                      className="text-sm"
-                      title="מתאריך"
-                    />
-                    <Input
-                      type="date"
-                      value={dateVal(field.name).to ?? ""}
-                      onChange={e => setField(field.name, { ...dateVal(field.name), to: e.target.value })}
-                      className="text-sm"
-                      title="עד תאריך"
-                    />
-                  </div>
+                  <DateRange value={dateVal(field.name)} onChange={v => setField(field.name, v)} />
                 ) : (
                   <Input
                     value={(filters[field.name] as string) ?? ""}
@@ -136,6 +204,7 @@ export function AgentPanel({
               </div>
             ))}
           </div>
+          <FilterMatches agentId={agent.id} filters={filters} />
         </div>
       )}
 

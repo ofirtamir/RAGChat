@@ -273,3 +273,23 @@ def test_the_admin_switch_turns_spelling_variants_off(monkeypatch):
     assert hybrid_index._spellings_on() is False
     monkeypatch.setattr(admin_store, "get_settings", lambda: {})
     assert hybrid_index._spellings_on() is True
+
+
+# ── The filter panel: matching count, list, and the title field ──────────
+
+def test_panel_count_and_newest_first(ctx, monkeypatch):
+    monkeypatch.setattr(filter_catalog, "get_context", lambda agent, wait=True: ctx)
+    assert filter_step.matching_documents(AGENT, {}) == {"count": 9, "total": 9, "documents": []}
+    out = filter_step.matching_documents(AGENT, {"Committee": "ירושלים"}, limit=2)
+    assert out["count"] == 5 and [d["key"] for d in out["documents"]] == ["k1", "k3"]
+    assert out["documents"][0]["date"] == "01.03.2025"
+    dated = filter_step.matching_documents(AGENT, {"DecisionDate": {"from": "2024-01-01", "to": "2024-12-31"}})
+    assert dated["count"] == 7
+
+
+def test_title_field_filters_by_every_word(ctx, monkeypatch):
+    monkeypatch.setattr(filter_catalog, "get_context", lambda agent, wait=True: ctx)
+    out = filter_step.matching_documents(AGENT, {"AppraisalHeader": "אלמוג  זיתוני"}, limit=5)
+    assert {d["key"] for d in out["documents"]} == {"k1", "k2"}
+    plan = filter_step.plan_filters(AGENT, "מה נקבע?", {"AppraisalHeader": "זיתוני 50%_x"}, ctx=ctx)
+    assert plan.where == "source LIKE '%זיתוני%' AND source LIKE '%50%' AND source LIKE '%x%'"

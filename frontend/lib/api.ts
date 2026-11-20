@@ -125,6 +125,30 @@ export async function getAgents(token: string | undefined): Promise<AgentInfo[]>
   return data.agents ?? []
 }
 
+export interface MatchingDocuments {
+  count: number
+  total: number
+  documents: { key: string; title: string; date: string | null }[]
+}
+
+/** How many decisions the chosen filters leave; with `limit`, the newest of them too. */
+export async function getMatchingDocuments(
+  agentId: string,
+  filters: AgentFilters,
+  token: string | undefined,
+  limit = 0,
+  signal?: AbortSignal,
+): Promise<MatchingDocuments> {
+  const res = await authFetch(`${API_BASE}/agents/${encodeURIComponent(agentId)}/matching`, token, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ filters, limit }),
+    signal,
+  })
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  return res.json()
+}
+
 export async function sendMessage(
   query: string,
   chatHistory: { role: string; content: string }[],

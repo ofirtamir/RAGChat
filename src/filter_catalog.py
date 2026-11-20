@@ -79,6 +79,7 @@ def build_context(agent: dict, rows) -> Context:
     """rows: (record_key, title, meta JSON, status, chars), as library_store.filter_rows."""
     names = [f["name"] for f in agent.get("filters", [])]
     choice = [f["name"] for f in agent.get("filters", []) if f.get("type") == "choice"]
+    headers = [n for n in names if n.endswith("Header")]
     stored: dict[str, set[str]] = {n: set() for n in choice}
     parsed = []
     for key, title, meta_json, status, chars in rows:
@@ -98,6 +99,8 @@ def build_context(agent: dict, rows) -> Context:
         ctx.records[key] = {n: meta.get(n) for n in names if meta.get(n) not in (None, "")}
         ctx.sizes[key] = int(chars or 0)
         ctx.sources[key] = source_name(agent, meta, title or key)
+        for n in headers:                       # the title filter tests what the index's `source` holds
+            ctx.records[key][n] = ctx.sources[key]
         for n in choice:
             if meta.get(n) not in (None, ""):
                 ctx.by_value.setdefault(n, {}).setdefault(str(meta[n]).strip(), set()).add(key)
