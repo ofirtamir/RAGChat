@@ -256,3 +256,12 @@ def test_keyword_query_asks_for_both_spellings():
     assert "וועדה" in hebrew_text.keyword_query("ועדה").split()
     assert "בנייה" in hebrew_text.keyword_query("בניה").split()
     assert "הועדה" in hebrew_text.keyword_query("הוועדה").split()
+    assert "קריית" not in hebrew_text.keyword_query("בקרית אונו", with_spellings=False).split()
+
+
+def test_the_admin_switch_turns_spelling_variants_off(monkeypatch):
+    from src import admin_store, hybrid_index
+    monkeypatch.setattr(admin_store, "get_settings", lambda: {"keyword_spellings": False})
+    assert hybrid_index._spellings_on() is False
+    monkeypatch.setattr(admin_store, "get_settings", lambda: {})
+    assert hybrid_index._spellings_on() is True

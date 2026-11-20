@@ -264,6 +264,15 @@ def chunks_for_source(agent: dict, source: str) -> list[Document]:
     return [_to_document(r) for r in sorted(rows, key=lambda r: (r["record_key"], r["chunk_index"]))]
 
 
+def _spellings_on() -> bool:
+    """The admin switch for keyword spelling variants (on unless turned off)."""
+    try:
+        from src import admin_store
+        return bool(admin_store.get_settings().get("keyword_spellings", True))
+    except Exception:
+        return True
+
+
 def _hybrid(agent: dict, query: str, filters: dict | None, strict: bool = True, plan=None) -> dict:
     """Run both searches and fuse them. With strict=False a failing search is
     reported in `errors` instead of raised (the admin search lab).
@@ -304,7 +313,7 @@ def _hybrid(agent: dict, query: str, filters: dict | None, strict: bool = True, 
             raise
         out["errors"]["semantic"] = str(exc)[:300]
 
-    terms = keyword_query(query)
+    terms = keyword_query(query, with_spellings=_spellings_on())
     out["terms"] = terms
     if terms:
         try:

@@ -91,14 +91,16 @@ def spellings(word: str) -> list[str]:
     return [w for w in dict.fromkeys(out) if w != word][:2]
 
 
-def keyword_query(text: str) -> str:
-    """A keyword query for `text`: its distinct terms, longest-first, then the
-    other spellings of those terms (no re-indexing needed)."""
+def keyword_query(text: str, with_spellings: bool = True) -> str:
+    """A keyword query for `text`: its distinct terms, longest-first, then (unless
+    turned off) the other spellings of those terms (no re-indexing needed)."""
     seen: dict[str, None] = {}
     for term in keyword_terms(text):
         if len(term) >= 2 or term.isdigit():
             seen.setdefault(term, None)
     main = sorted(seen, key=len, reverse=True)[:32]
+    if not with_spellings:
+        return " ".join(main)
     extra = [s for t in main for s in spellings(t) if s not in seen]
     return " ".join(main + list(dict.fromkeys(extra))[:_MAX_SPELLINGS])
 

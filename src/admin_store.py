@@ -32,6 +32,7 @@ DEFAULT_SETTINGS = {
     "price_embedding_per_m": 0.15, # USD per 1M embedded tokens (immediate)
     "price_embedding_batch_per_m": 0.075,  # USD per 1M embedded tokens via the Batch API
     "eval_budget_usd": 1.0,        # total the retrieval benchmark may spend (building sets, runs)
+    "keyword_spellings": True,     # keyword search also asks for other spellings (קרית/קריית)
 }
 
 

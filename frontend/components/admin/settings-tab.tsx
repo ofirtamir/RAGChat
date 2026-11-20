@@ -6,7 +6,15 @@ import { Input } from "@/components/ui/input"
 import { AdminSettings, getSettings, saveSettings } from "@/lib/admin-api"
 import { CARD, ErrorNote } from "./shared"
 
-type NumericKey = Exclude<keyof AdminSettings, "require_approval">
+type ToggleKey = "require_approval" | "keyword_spellings"
+type NumericKey = Exclude<keyof AdminSettings, ToggleKey>
+
+const TOGGLES: { key: ToggleKey; label: string; hint: string }[] = [
+  { key: "require_approval", label: "משתמשים חדשים דורשים אישור",
+    hint: "כשמסומן, מי שנכנס עם גוגל בפעם הראשונה לא יכול לשאול עד שתאשר אותו במסך המשתמשים." },
+  { key: "keyword_spellings", label: "חיפוש מילים גם בכתיב החלופי",
+    hint: "כשמסומן, חיפוש המילים מחפש גם קרית/קריית, ועדה/וועדה, בניה/בנייה. אפשר לכבות ולהשוות בבנצ׳מרק." },
+]
 
 const FIELDS: { key: NumericKey; label: string; hint: string; step: string }[] = [
   { key: "default_daily_limit", label: "מכסת שאלות יומית למשתמש", hint: "0 = ללא הגבלה. אפשר לקבוע מכסה אישית במסך המשתמשים.", step: "1" },
@@ -44,20 +52,20 @@ export function SettingsTab({ token }: { token: string | undefined }) {
 
   return (
     <div className="max-w-xl space-y-3">
-      <label className={`${CARD} flex cursor-pointer items-start gap-3 p-5`}>
-        <input
-          type="checkbox"
-          className="mt-1 h-4 w-4 accent-foreground"
-          checked={draft.require_approval}
-          onChange={e => { setDraft({ ...draft, require_approval: e.target.checked }); setNotice("") }}
-        />
-        <span>
-          <span className="block text-sm font-medium">משתמשים חדשים דורשים אישור</span>
-          <span className="mt-0.5 block text-xs leading-relaxed text-muted-foreground">
-            כשמסומן, מי שנכנס עם גוגל בפעם הראשונה לא יכול לשאול עד שתאשר אותו במסך המשתמשים.
+      {TOGGLES.map(t => (
+        <label key={t.key} className={`${CARD} flex cursor-pointer items-start gap-3 p-5`}>
+          <input
+            type="checkbox"
+            className="mt-1 h-4 w-4 accent-foreground"
+            checked={draft[t.key]}
+            onChange={e => { setDraft({ ...draft, [t.key]: e.target.checked }); setNotice("") }}
+          />
+          <span>
+            <span className="block text-sm font-medium">{t.label}</span>
+            <span className="mt-0.5 block text-xs leading-relaxed text-muted-foreground">{t.hint}</span>
           </span>
-        </span>
-      </label>
+        </label>
+      ))}
 
       {FIELDS.map(f => (
         <label key={f.key} className={`${CARD} block p-5`}>
