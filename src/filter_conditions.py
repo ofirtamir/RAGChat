@@ -9,6 +9,8 @@ Kinds:
          may hold several numbers ("81,84,90"), so equality would miss them.
 - range  a date field between `start` and `end` (YYYYMMDD, either may be None)
 - keys   specific decisions (record keys), e.g. a party name found in titles
+- text   the title field ("חיפוש לפי כותרת המסמך") holds every word in `values`;
+         in the index the title is the `source` column (src/agent_ingest.source_name)
 """
 from __future__ import annotations
 
@@ -19,6 +21,7 @@ KINDS = ("in", "num", "range", "keys")
 KEYS_FIELD = "_decision"
 _KEY_RE = re.compile(r"^[A-Za-z0-9_\-]+$")
 _MAX_VALUES = 500
+MAX_TITLE_WORDS = 8
 
 
 def _sql_str(value) -> str:
@@ -51,6 +54,8 @@ class Condition:
             return parts[0] if len(parts) == 1 else "(" + " OR ".join(parts) + ")"
         if self.kind == "keys":
             return f"record_key IN ({', '.join(_sql_str(v) for v in self.values)})"
+        if self.kind == "text":
+            return " AND ".join(f"source LIKE {_sql_str('%' + w + '%')}" for w in self.values)
         parts = []
         if self.start is not None:
             parts.append(f"{self.field}_int >= {int(self.start)}")
@@ -65,6 +70,8 @@ class Condition:
         raw = meta.get(self.field)
         if self.kind == "in":
             return str(raw or "").strip() in self.values
+        if self.kind == "text":
+            return all(w in str(raw or "") for w in self.values)
         if self.kind == "num":
             text = str(raw or "")
             return any(re.search(rf"(^|[^0-9]){n}([^0-9]|$)", text) for n in self.values)
@@ -129,9 +136,14 @@ def from_manual(agent: dict, filters: dict | None, expand=None) -> list[Conditio
     schema = {f["name"]: f for f in agent.get("filters", [])}
     for name, value in (filters or {}).items():
         f = schema.get(name)
-        if f is None or value in (None, "", {}) or name.endswith("Header"):
+        if f is None or value in (None, "", {}):
             continue
         label = f.get("label") or name
+        if name.endswith("Header"):
+            words = re.sub(r"[%_\\]", " ", str(value)).split()[:MAX_TITLE_WORDS]
+            if words:
+                out.append(Condition(name, "text", words, label=label, display=" ".join(words), source="manual"))
+            continue
         if f["type"] == "date":
             if not isinstance(value, dict):
                 continue
