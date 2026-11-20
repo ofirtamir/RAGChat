@@ -179,7 +179,7 @@ def process(doc: dict, client: GovilClient, out_dir: Path, llm_tables: bool = Tr
     (at most TABLE_FALLBACK_MAX_PER_DOC) and tables/text pasted as pictures (after a
     free filter, at most IMAGE_READER_MAX_PER_DOC; with defer_images, queued for the
     Batch API instead). Returns the /result payload."""
-    from src import image_reader, table_fallback
+    from src import image_reader, page_tables, table_fallback
     from src.pdf_parser import parse_pdf, strip_image_markers
 
     pages, problems, tables = [], [], 0
@@ -203,12 +203,16 @@ def process(doc: dict, client: GovilClient, out_dir: Path, llm_tables: bool = Tr
         image_budget -= pictures["calls"]
         fixed += pictures["read"]
         cost += pictures["cost_usd"]
+        carried = {}
+        for c in page_tables.carry_headers(parsed):   # tables cut by a page break
+            carried.setdefault(c["page"], []).append(c)
         unread = {}
         for page_no, problem in pictures["unread"]:
             unread.setdefault(page_no, []).append(problem)
         for page in parsed:
             number = len(pages)
             tables += len(page.tables)
+            page_tables.unflag(page.tables, carried.get(page.number, []))
             for t in page.tables:
                 if t.problems and id(t) not in repaired["fixed_ids"]:
                     problems.append({"page": number, "problems": t.problems})
