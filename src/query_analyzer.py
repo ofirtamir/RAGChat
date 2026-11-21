@@ -9,7 +9,7 @@ Replaces the separate Router and Rewriter nodes to save an LLM call.
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.output_parsers import JsonOutputParser
-from langchain_core.messages import HumanMessage, AIMessage
+from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 from pydantic import BaseModel, Field
 
 from src.llm import fast_llm
@@ -25,7 +25,12 @@ class QueryAnalysis(BaseModel):
         description="Optimized search queries for vector retrieval. Empty list if needs_retrieval is False."
     )
     reasoning: str = Field(
+        default="",   # the model sometimes leaves it out; that must not fail the whole analysis
         description="Brief explanation of the routing and rewriting decision"
+    )
+    filters: list[dict] | None = Field(
+        default=None,
+        description="Catalog values the question names (src/model_filters); None when not asked for",
     )
 
 
@@ -87,8 +92,10 @@ def _get_analyzer_llm() -> ChatGoogleGenerativeAI:
     return fast_llm()
 
 
-def analyze_query(query: str, chat_history: list[dict] | None = None) -> QueryAnalysis:
-    """Route and rewrite a query in a single LLM call."""
+def analyze_query(query: str, chat_history: list[dict] | None = None,
+                  agent: dict | None = None) -> QueryAnalysis:
+    """Route and rewrite a query in a single LLM call. With an `agent` that has
+    filters, the same call also returns the filter values the question names."""
     llm = _get_analyzer_llm()
 
     # Build history as Message objects (avoids template variable issues with {})
@@ -105,8 +112,14 @@ def analyze_query(query: str, chat_history: list[dict] | None = None) -> QueryAn
     # to the hard-coded literal above if Langfuse is unavailable.
     system_prompt = load_prompt("analyzer-system", fallback=ANALYZER_SYSTEM_PROMPT)
 
+    # The filter instructions are a message of their own (not part of the
+    # template, so the value lists need no brace escaping, and a prompt edited
+    # in Langfuse still gets them).
+    filter_section = _filter_section(agent)
+    extra = [SystemMessage(content=filter_section)] if filter_section else []
     prompt = ChatPromptTemplate.from_messages([
         ("system", system_prompt),
+        *extra,
         MessagesPlaceholder("chat_history"),
         ("human", "{query}"),
     ])
@@ -115,4 +128,19 @@ def analyze_query(query: str, chat_history: list[dict] | None = None) -> QueryAn
     chain = prompt | llm | parser
 
     result = chain.invoke({"query": query, "chat_history": history_messages})
-    return QueryAnalysis(**result)
+    fields = {k: v for k, v in result.items() if k in QueryAnalysis.model_fields}
+    found = fields.pop("filters", None)
+    # a malformed filters answer must not cost the routing and rewriting
+    fields["filters"] = ([x for x in found if isinstance(x, dict)] if isinstance(found, list) else []) \
+        if filter_section else None
+    return QueryAnalysis(**fields)
+
+
+def _filter_section(agent: dict | None) -> str:
+    if not agent or not agent.get("filters"):
+        return ""
+    from src import filter_catalog, model_filters
+    try:
+        return model_filters.prompt_section(agent, filter_catalog.get_context(agent, wait=False))
+    except Exception:
+        return ""

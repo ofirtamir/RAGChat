@@ -97,13 +97,13 @@ def hybrid(agent: dict, query: str, filters: dict | None, k: int) -> dict:
             "keyword_terms": found.get("keyword_terms", "")}
 
 
-def _sub_query(agent: dict, query: str, filters: dict | None) -> dict:
+def _sub_query(agent: dict, query: str, filters: dict | None, plan=None) -> dict:
     """One search query as graph.retriever_node runs it (via retriever.retrieve_for_query):
     hybrid search for RETRIEVER_CANDIDATES chunks, then the Gemini rerank to RETRIEVER_K.
     Section expansion is skipped: it never changes which decision a hit belongs to."""
     from config import RETRIEVER_CANDIDATES, RETRIEVER_K
 
-    found = hybrid_index.search_stages(agent, query, filters, k=RETRIEVER_CANDIDATES)
+    found = hybrid_index.search_stages(agent, query, filters, k=RETRIEVER_CANDIDATES, plan=plan)
     top = [r for r in found["rows"] if r["in_top_k"]]
     docs = hybrid_index.to_documents(top)
     for doc, row in zip(docs, top):
@@ -131,16 +131,19 @@ def pipeline(agent: dict, query: str, filters: dict | None) -> dict:
     then each search query searched and reranked, as in graph.py."""
     error = None
     try:
-        analysis = query_analyzer.analyze_query(query, [])
+        analysis = query_analyzer.analyze_query(query, [], agent=agent)
         needs, queries = analysis.needs_retrieval, list(analysis.rewritten_queries or [])
+        model_items = analysis.filters
     except Exception as exc:  # graph.analyze_query_node falls back to the raw question
-        needs, queries, error = True, [], f"analyzer: {str(exc)[:200]}"
+        needs, queries, error, model_items = True, [], f"analyzer: {str(exc)[:200]}", None
     if not needs:
         return {"route": "chitchat", "search_queries": [], "results": [], "candidates": [], "error": error}
     queries = queries or [query]
+    from src.filter_step import plan_filters   # as graph.filters_node: once, on the user's own words
+    plan = plan_filters(agent, query, filters, model_items=model_items)
     parent = contextvars.copy_context()  # carries a usage collector (search_one) into the worker threads
     with ThreadPoolExecutor(max_workers=len(queries)) as pool:
-        subs = list(pool.map(lambda q: parent.copy().run(_sub_query, agent, q, filters), queries))
+        subs = list(pool.map(lambda q: parent.copy().run(_sub_query, agent, q, filters, plan), queries))
 
     rows, found_by, kept_by = {}, {}, {}
     for n, sub in enumerate(subs):

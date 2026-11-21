@@ -45,6 +45,13 @@ def ctx():
     return filter_catalog.build_context(AGENT, ROWS)
 
 
+@pytest.fixture(autouse=True)
+def catalog_rows(monkeypatch):
+    """The catalog the not-indexed-yet count reads (library_store.filter_rows)."""
+    from src import library_store
+    monkeypatch.setattr(library_store, "filter_rows", lambda agent_id: ROWS)
+
+
 def detect(ctx, q):
     d = query_filters.detect(AGENT, q, ctx)
     return {c.field: c for c in d.hard}, {c.field: c for c in d.soft}
@@ -112,6 +119,10 @@ def test_block_plot_and_years(ctx):
     assert (hard["DecisionDate"].start, hard["DecisionDate"].end) == (20220101, None)
     hard, _ = detect(ctx, "חלקות 5, 6 בגוש 6426")
     assert hard["Plot"].values == ["5", "6"] and hard["Block"].values == ["6426"]
+    hard, _ = detect(ctx, "בעמק חפר מ-2022")             # a hyphen after the prefix letter
+    assert (hard["DecisionDate"].start, hard["DecisionDate"].end) == (20220101, None)
+    hard, _ = detect(ctx, "שפורסמו ב-2024")
+    assert (hard["DecisionDate"].start, hard["DecisionDate"].end) == (20240101, 20241231)
 
 
 @pytest.mark.parametrize("question, committee", [
@@ -131,18 +142,10 @@ def test_committee_with_prefixes_and_spelling(ctx, question, committee):
     assert hard["Committee"].values == [committee]   # the stored value, never "בבית שאן"
 
 
-def test_party_name_from_titles(ctx):
-    hard, _ = detect(ctx, "זיתוני אלמוג נ' ועדה מקומית ירושלים")
-    assert hard["Committee"].values == ["ירושלים"]
-    assert hard["_decision"].values == ["k1", "k2"]
-    hard, _ = detect(ctx, "זיתוני נגד ירושלים")          # one word + "נגד" is enough
-    assert hard["_decision"].values == ["k1", "k2"] and hard["Committee"].values == ["ירושלים"]
-    hard, _ = detect(ctx, "ההחלטה בעניין לזיתוני")        # prefix removed: the word is in titles
-    assert hard["_decision"].values == ["k1", "k2"]
-    hard, soft = detect(ctx, "מה קרה לזיתוני אלמוג")      # no "נ'"/"נגד": ordinary words also occur in titles
-    assert "_decision" not in hard and "_decision" not in soft
-    hard, soft = detect(ctx, "היטל השבחה בגין לקוח כלשהו")  # title words, but no party cue
-    assert "_decision" not in hard
+def test_party_names_are_not_filters(ctx):
+    # BM25 finds a rare name by itself; ordinary words made false party filters (2026-11-21)
+    hard, soft = detect(ctx, "זיתוני אלמוג נ' ועדה מקומית ירושלים")
+    assert set(hard) == {"Committee"} and not soft
 
 
 def test_appraiser_name_orders_and_nicknames(ctx):
@@ -220,7 +223,7 @@ def test_few_matches_are_read_whole_and_many_are_filtered(ctx):
     assert plan.mode == "filtered" and plan.count == 5
     assert "Committee IN ('ירושלים')" in plan.where
     plan = filter_step.plan_filters(AGENT, "החלטות בתל אביב", ctx=ctx)   # catalogued, not indexed
-    assert plan.mode == "relaxed"
+    assert plan.mode == "relaxed" and "עוד לא נקלטה" in plan.note
 
 
 def test_manual_choice_wins_and_removed_chips_stay_removed(ctx):
