@@ -290,6 +290,15 @@ def test_panel_count_and_newest_first(ctx, monkeypatch):
     assert dated["count"] == 7
 
 
+def test_panel_count_includes_the_filters_found_in_the_question(ctx, monkeypatch):
+    monkeypatch.setattr(filter_catalog, "get_context", lambda agent, wait=True: ctx)
+    found = filter_step.plan_filters(AGENT, "היטל השבחה בירושלים", ctx=ctx).to_dict()["applied"]
+    assert filter_step.matching_documents(AGENT, {}, found=found)["count"] == 5
+    # the user's own choice wins its field; junk is ignored
+    out = filter_step.matching_documents(AGENT, {"Committee": "בית שאן"}, found=found + [{"field": "Nope"}, "x"])
+    assert out["count"] == 1
+
+
 def test_title_field_filters_by_every_word(ctx, monkeypatch):
     monkeypatch.setattr(filter_catalog, "get_context", lambda agent, wait=True: ctx)
     out = filter_step.matching_documents(AGENT, {"AppraisalHeader": "אלמוג  זיתוני"}, limit=5)

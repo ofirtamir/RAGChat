@@ -208,12 +208,17 @@ def filters_node(state: dict) -> dict:
     return out
 
 
-def matching_documents(agent: dict, filters: dict | None, limit: int = 0) -> dict:
+def matching_documents(agent: dict, filters: dict | None, limit: int = 0,
+                       found: list[dict] | None = None) -> dict:
     """How many indexed decisions the filter panel's choices leave and, with
-    limit > 0, the newest of them — shown under the panel. Catalog only, free."""
+    limit > 0, the newest of them — shown under the panel. Catalog only, free.
+    `found`: the filters the last answer found in its question (as the chat UI
+    got them, validated like inherited ones); the user's own choice wins a field."""
     ctx = filter_catalog.get_context(agent)
     manual = from_manual(agent, filters, lambda f, v: filter_values.stored_forms(ctx.vocab, f, v))
-    keys = ctx.matching(manual)
+    taken = {c.field for c in manual}
+    extra = [c for c in (from_dict(agent, d) for d in (found or [])) if c and c.field not in taken]
+    keys = ctx.matching(manual + extra)
     out = {"count": len(keys), "total": len(ctx.records), "documents": []}
     if limit <= 0 or not keys:
         return out
