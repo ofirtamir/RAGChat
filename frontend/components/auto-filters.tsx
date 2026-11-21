@@ -76,7 +76,7 @@ export function AutoBadge({ auto, onRemove, busy }: {
   const text = inherited && auto.kind === "applied" ? "מהשאלה הקודמת" : BADGE[auto.kind]
   return (
     <span
-      className="inline-flex items-center gap-0.5 rounded-full bg-blue-50 px-1.5 py-px text-[10px] font-medium text-blue-700 dark:bg-blue-400/10 dark:text-blue-300"
+      className="inline-flex shrink-0 items-center gap-0.5 whitespace-nowrap rounded-full bg-blue-50 px-1.5 py-px text-[10px] font-medium text-blue-700 dark:bg-blue-400/10 dark:text-blue-300"
       title={auto.condition.matched ? `מתוך השאלה: ${auto.condition.matched}` : undefined}
     >
       <Sparkles className="h-2.5 w-2.5" aria-hidden />

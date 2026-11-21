@@ -68,10 +68,11 @@ const DATE_PRESETS: { label: string; range: () => DateValue }[] = [
 ]
 
 /** A "from – to" date pair with labels and one-click ranges. */
-function DateRange({ value, onChange, inputClass }: {
+function DateRange({ value, onChange, inputClass, canClear = true }: {
   value: DateValue
   onChange: (v: DateValue) => void
   inputClass?: string
+  canClear?: boolean
 }) {
   const reversed = Boolean(value.from && value.to && value.from > value.to)
   return (
@@ -117,7 +118,7 @@ function DateRange({ value, onChange, inputClass }: {
             </button>
           )
         })}
-        {(value.from || value.to) && (
+        {canClear && (value.from || value.to) && (
           <button
             type="button"
             onClick={() => onChange({})}
@@ -268,6 +269,7 @@ export function AgentPanel({
                       value={shown && typeof shown === "object" ? shown : dateVal(field.name)}
                       onChange={v => setField(field.name, v)}
                       inputClass={autoFieldClass(found)}
+                      canClear={!found}
                     />
                   ) : (
                     <Input
