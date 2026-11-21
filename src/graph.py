@@ -48,6 +48,7 @@ class GraphState(TypedDict):
     inherited_filters: list[dict] | None    # The previous answer's filters (follow-up questions)
     disabled_filters: list[str] | None      # Found-filter fields the user removed
     filter_plan: object | None              # src.filter_step.FilterPlan
+    model_filters: list[dict] | None        # Filter values the analyzer found (None: not asked / failed)
 
 
 def _agent_context(state: GraphState) -> tuple[str | None, dict | None]:
@@ -144,7 +145,9 @@ def _build_history_messages(chat_history: list[dict], limit: int = 10) -> list:
 def analyze_query_node(state: GraphState) -> dict:
     """Route and rewrite the query in a single LLM call."""
     try:
-        analysis = analyze_query(state["query"], state.get("chat_history", []))
+        from src.agents import get_agent
+        agent = get_agent(state["agent_id"]) if state.get("agent_id") else None
+        analysis = analyze_query(state["query"], state.get("chat_history", []), agent=agent)
 
         route = RouteDecision(
             needs_retrieval=analysis.needs_retrieval,
@@ -160,7 +163,7 @@ def analyze_query_node(state: GraphState) -> dict:
         else:
             rewritten = create_fallback_rewrite(state["query"])
 
-        return {"route": route, "rewritten": rewritten}
+        return {"route": route, "rewritten": rewritten, "model_filters": analysis.filters}
 
     except Exception:
         # Fallback: assume retrieval needed, use original query
@@ -624,6 +627,7 @@ def _build_initial_state(query: str, chat_history: list[dict] | None, skip_gener
         "inherited_filters": inherited_filters,
         "disabled_filters": disabled_filters,
         "filter_plan": None,
+        "model_filters": None,
     }
 
 

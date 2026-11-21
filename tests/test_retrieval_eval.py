@@ -164,7 +164,7 @@ def test_search_rejects_too_many_items_and_bad_mode(client):
 def test_pipeline_runs_analysis_search_and_rerank_per_search_query(client, index, monkeypatch):
     seen = []
 
-    def analyze(query, history):
+    def analyze(query, history, agent=None):
         if "שלום" in query:
             return QueryAnalysis(needs_retrieval=False, rewritten_queries=[], reasoning="greeting")
         return QueryAnalysis(needs_retrieval=True, rewritten_queries=["פיצויים סעיף 197", "היטל השבחה"],
@@ -193,7 +193,7 @@ def test_pipeline_runs_analysis_search_and_rerank_per_search_query(client, index
 
 
 def test_pipeline_falls_back_to_the_raw_question_when_analysis_fails(client, index, monkeypatch):
-    def broken(query, history):
+    def broken(query, history, agent=None):
         raise RuntimeError("402 prepaid credit")
 
     monkeypatch.setattr(eval_search.query_analyzer, "analyze_query", broken)

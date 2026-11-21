@@ -6,32 +6,24 @@ the background every few minutes, so a question never scans the index. It holds:
 - the value dictionary (src/filter_values) — schema values + stored values
 - for every *indexed* decision: its filter metadata, size and display name, plus
   {field: {value: keys}} for fast counting
-- a word index of the party names in the titles ("… בעניין היטל השבחה
-  <party> נ ועדה מקומית <X> ג <block> ח <plot> - <appraiser>")
+
+Decisions not indexed yet are counted on demand (count_unindexed), only when a
+question's filters match no indexed decision.
 """
 from __future__ import annotations
 
 import json
 import logging
-import re
 import threading
 import time
 from dataclasses import dataclass, field
 
 from src import filter_values
 from src.filter_conditions import Condition
-from src.hebrew_match import normalize
 
 logger = logging.getLogger(__name__)
 
 REFRESH_SECONDS = 600
-_IN_RE = normalize("בעניין")
-_TITLE_END = re.compile(r"\sג['׳]?\s*\d|\s[–—-]\s[^–—-]*$")
-PARTY_STOP = frozenset(normalize(w) for w in """
-    נ נגד ועדה ועדת הועדה מקומית המקומית מחוזית לתכנון תכנון ובניה בניה עירית עיריית מועצה
-    אזורית בעמ בע"מ חברה חברת ואח ואחרים ואחר עמ את של ו ה ב ל מ שמאי מכריע הכרעת מיום
-    היטל השבחה תביעת פיצויים תיק הפקעות הפקעה ערר עורר עוררת
-""".split())
 
 
 @dataclass
@@ -41,7 +33,6 @@ class Context:
     sizes: dict[str, int] = field(default_factory=dict)            # key → characters
     sources: dict[str, str] = field(default_factory=dict)          # key → display name
     by_value: dict[str, dict[str, set[str]]] = field(default_factory=dict)
-    party: dict[str, set[str]] = field(default_factory=dict)       # title word → keys
     built_at: float = 0.0
 
     @property
@@ -63,16 +54,6 @@ class Context:
             keys = hit if keys is None else keys & hit
         pool = self.records.keys() if keys is None else keys
         return sorted(k for k in pool if all(c.test(self.records[k], k) for c in rest))
-
-
-def party_words(title: str) -> set[str]:
-    """Normalised words of the party part of a decision title."""
-    m = _TITLE_END.search(title or "")
-    text = (title or "")[:m.start()] if m else (title or "")
-    toks = normalize(text).split()
-    if _IN_RE in toks:
-        toks = toks[toks.index(_IN_RE) + 1:]
-    return {t for t in toks if len(t) >= 2 and not t.isdigit() and t not in PARTY_STOP}
 
 
 def build_context(agent: dict, rows) -> Context:
@@ -104,10 +85,34 @@ def build_context(agent: dict, rows) -> Context:
         for n in choice:
             if meta.get(n) not in (None, ""):
                 ctx.by_value.setdefault(n, {}).setdefault(str(meta[n]).strip(), set()).add(key)
-        for w in party_words(title):
-            ctx.party.setdefault(w, set()).add(key)
     ctx.built_at = time.time()
     return ctx
+
+
+def count_unindexed(agent: dict, conditions: list[Condition]) -> int | None:
+    """Catalog decisions not indexed yet that satisfy every condition (one pass
+    over the catalog rows; None when the catalog cannot be read)."""
+    try:
+        from src import library_store
+        from src.agent_ingest import source_name
+        rows = library_store.filter_rows(agent["id"])
+    except Exception:
+        logger.exception("filter catalog: counting decisions not indexed yet failed")
+        return None
+    headers = [f["name"] for f in agent.get("filters", []) if f["name"].endswith("Header")]
+    count = 0
+    for key, title, meta_json, status, _ in rows:
+        if status == "indexed":
+            continue
+        try:
+            meta = json.loads(meta_json) if isinstance(meta_json, str) else dict(meta_json or {})
+        except (TypeError, ValueError):
+            continue
+        if headers:
+            meta.update({n: source_name(agent, meta, title or key) for n in headers})
+        if all(c.test(meta, key) for c in conditions):
+            count += 1
+    return count
 
 
 _contexts: dict[str, Context] = {}

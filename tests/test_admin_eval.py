@@ -339,11 +339,11 @@ def test_model_calls_in_a_pipeline_search_are_counted_across_threads(monkeypatch
         for cb in ensure_config().get("callbacks") or []:
             cb.on_llm_end(fake_llm_response())
 
-    def analyze(query, history):
+    def analyze(query, history, agent=None):
         fire()
         return QueryAnalysis(needs_retrieval=True, rewritten_queries=["א", "ב"], reasoning="")
 
-    def sub_query(agent, query, filters):  # runs in a worker thread
+    def sub_query(agent, query, filters, plan=None):  # runs in a worker thread
         fire()
         return {"query": query, "top": [], "kept": [], "scores": {}, "reranked": False, "errors": {}}
 

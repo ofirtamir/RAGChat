@@ -335,10 +335,10 @@ def search(agent: dict, query: str, filters: dict | None = None, k: int = 20, pl
     return [_to_document(found["rows"][i], score) for i, score in found["fused"][:k]]
 
 
-def search_stages(agent: dict, query: str, filters: dict | None = None, k: int = 20) -> dict:
+def search_stages(agent: dict, query: str, filters: dict | None = None, k: int = 20, plan=None) -> dict:
     """search(), with every stage laid out for the admin search lab: where each
     chunk ranked in the semantic and keyword lists, its raw scores, and the fused order."""
-    found = _hybrid(agent, query, filters, strict=False)
+    found = _hybrid(agent, query, filters, strict=False, plan=plan)
     plan = found.get("plan")
     sem_rank = {r["id"]: (i + 1, r.get("_distance")) for i, r in enumerate(found["semantic"])}
     kw_rank = {r["id"]: (i + 1, r.get("_score")) for i, r in enumerate(found["keyword"])}

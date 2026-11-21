@@ -1,13 +1,13 @@
-"""Find filter values inside a question, with no model call.
+"""Find filter values inside a question, with no model call — the fallback when
+the analyzer model's own filter answer (src/model_filters) is missing, and the
+source of block/plot/date values the model left out.
 
 - Block / plot numbers, dates and years: regular expressions.
 - Committee, appraiser, appraisal type/version, appraiser role: phrases from the
   value dictionary (src/filter_values), matched over the question's words.
   A word is tried as written first; prefix letters are removed only when the
   shorter word starts a known value (src/hebrew_match). Longer matches win.
-- Party names: words of the decision titles (src/filter_catalog), with the same
-  prefix rule, and only next to "נ'", "נגד", "בעניין"… — ordinary words occur in
-  some title too.
+- Party names are not filters: BM25 finds a rare name by itself.
 
 Every match is either certain (a hard filter) or uncertain (only preferred in
 ranking): a family name several appraisers share without "שמאי" before it, or a
@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 from datetime import date
 
 from src.filter_catalog import Context
-from src.filter_conditions import KEYS_FIELD, Condition
+from src.filter_conditions import Condition
 from src.filter_values import AMBIGUOUS_WORDS, Phrase
 from src.hebrew_match import display as readable, forms, normalize, prefix_splits
 
@@ -32,7 +32,7 @@ _PLOT = re.compile(rf"(?<![א-ת])(?:[א-ת]{{0,2}}חלק(?:ה|ות)?|ח{_GERESH
 _FULL_DATE = re.compile(r"(?<!\d)(\d{1,2})[./-](\d{1,2})[./-](\d{4})(?!\d)")
 _BETWEEN = re.compile(r"בין\s*(?:השנים\s*)?((?:19|20)\d{2})\s*(?:ל-?|עד|ו-?|[–—-])\s*((?:19|20)\d{2})"
                       r"|(?<!\d)((?:19|20)\d{2})\s*[–—-]\s*((?:19|20)\d{2})(?!\d)")
-_YEAR = re.compile(r"(?<![\d./-])((?:19|20)\d{2})(?![\d./-]?\d)")
+_YEAR = re.compile(r"(?<![\d./])(?<!\d-)((?:19|20)\d{2})(?![\d./-]?\d)")   # "מ-2022" too, not "1-2022"
 _FROM_WORDS = ("מאז", "משנת", "החל", "מ-", "מ")
 _AFTER_WORDS = ("אחרי", "לאחר")
 _UNTIL_WORDS = ("עד",)
@@ -41,7 +41,6 @@ _BEFORE_WORDS = ("לפני",)
 COMMITTEE_CUES = frozenset(normalize(w) for w in
                            "ועדה ועדת מקומית מחוזית לתכנון תכנון ובניה בניה עירית עיריית מועצה אזורית".split())
 APPRAISER_CUES = frozenset(normalize(w) for w in "שמאי שמאית מכריע מכריעה".split())
-PARTY_CUES = frozenset(normalize(w) for w in "נ נגד בעניין".split())
 QUESTION_STOP = frozenset(normalize(w) for w in """
     מה מי איך האם למה כמה איזה אילו של על את עם לגבי בין כל יש אין גם או אם כי זה זו זאת הוא היא
     החלטה החלטות הכרעה הכרעות שמאי שמאים שומה שומות שווי היטל השבחה פיצויים הפקעה דירה דירות
@@ -50,7 +49,6 @@ QUESTION_STOP = frozenset(normalize(w) for w in """
     יום מיום תאריך מרכז צפון דרום מזרח מערב עיר רחוב שכונה שכונת אזור מקרה מקרים דין
     בגין עבור לפי ידי כאשר קיים קיימת ניתן מבקש מבקשת עורר עוררת משיב משיבה נישום
 """.split())
-PARTY_MAX_KEYS = 300
 _KIND_RANK = {"full": 0, "article": 0, "surname": 1, "partial": 2}
 
 
@@ -75,7 +73,7 @@ def _numbers(text: str) -> list[str]:
     return list(dict.fromkeys(re.findall(r"\d+", text)))
 
 
-def _numbers_and_dates(agent: dict, query: str) -> tuple[list[Condition], str]:
+def numbers_and_dates(agent: dict, query: str) -> tuple[list[Condition], str]:
     """Block/plot/date conditions, and the query with those parts blanked out."""
     names = {f["name"]: f for f in agent.get("filters", [])}
     out, blanked = [], query
@@ -241,56 +239,9 @@ def _value_conditions(toks: list[str], ctx: Context) -> tuple[list[Condition], l
     return list(hard.values()), list(soft.values()), covered | {j for m in matches for j in range(m.start, m.end)}
 
 
-# ── parties (title words) ────────────────────────────────────────────────
-
-def _party_conditions(toks: list[str], covered: set[int], ctx: Context) -> tuple[list[Condition], list[Condition]]:
-    if not ctx.party:
-        return [], []
-    hits: dict[int, set[str]] = {}
-    for i, tok in enumerate(toks):
-        if i in covered or tok.isdigit() or tok in QUESTION_STOP or tok in PARTY_CUES or tok in ctx.vocab.words:
-            continue
-        if any(r in QUESTION_STOP for _, r in prefix_splits(tok)):   # "ושמאי", "בבניה"
-            continue
-        options = forms(tok, ctx.party)
-        form = tok if tok in ctx.party else (options[1][0] if len(options) > 1 else None)
-        if not form or len(form) < 3 or form in QUESTION_STOP:
-            continue
-        hits[i] = ctx.party[form]
-    def is_cue(k: int) -> bool:
-        return 0 <= k < len(toks) and (toks[k] in PARTY_CUES or
-                                       any(r in PARTY_CUES for _, r in prefix_splits(toks[k])))
-
-    # Only words next to "נ'", "נגד", "בעניין"… count as a party name. Ordinary words
-    # ("בגין", "קיים כאשר") also occur in some title, so without a cue they are not
-    # evidence of a party (measured on the benchmark set, 2026-11-19).
-    hard = []
-    i = 0
-    while i < len(toks):
-        if i not in hits:
-            i += 1
-            continue
-        j = i
-        keys = set(hits[i])
-        while j + 1 in hits and keys & hits[j + 1]:
-            j += 1
-            keys &= hits[j]
-        if keys and len(keys) <= PARTY_MAX_KEYS and (is_cue(i - 1) or is_cue(j + 1)):
-            words = readable(" ".join(toks[i:j + 1]))
-            hard.append(Condition(KEYS_FIELD, "keys", sorted(keys), label="צד", display=words, matched=words))
-        i = j + 1
-    return hard, []
-
-
 def detect(agent: dict, query: str, ctx: Context) -> Detection:
     """Filter conditions named in `query` (see the module docstring)."""
-    numeric, rest = _numbers_and_dates(agent, query or "")
+    numeric, rest = numbers_and_dates(agent, query or "")
     toks = normalize(rest).split()
-    hard, soft, covered = _value_conditions(toks, ctx)
-    p_hard, p_soft = _party_conditions(toks, covered, ctx)
-    if len(p_hard) > 1:   # several party names: decisions that have them all
-        keys = set.intersection(*(set(c.values) for c in p_hard))
-        p_hard = [Condition(KEYS_FIELD, "keys", sorted(keys), label="צד",
-                            display=" + ".join(c.display for c in p_hard),
-                            matched=" ".join(c.matched for c in p_hard))]
-    return Detection(numeric + hard + p_hard, soft + p_soft)
+    hard, soft, _ = _value_conditions(toks, ctx)
+    return Detection(numeric + hard, soft)
