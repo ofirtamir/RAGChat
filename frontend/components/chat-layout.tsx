@@ -381,6 +381,7 @@ export function ChatLayout() {
   }
 
   const isEmpty = !activeSession?.messages.length
+  const lastAnswer = [...(activeSession?.messages ?? [])].reverse().find(m => m.role === "assistant")
   const firstName = authSession?.user?.name?.trim().split(/\s+/)[0]
 
   if (me && !me.allowed) return <AccessGate me={me} />
@@ -392,6 +393,9 @@ export function ChatLayout() {
       onSelectAgent={setSelectedAgentId}
       filters={agentFilters}
       onFiltersChange={setAgentFilters}
+      autoFilters={lastAnswer?.autoFilters}
+      onRemoveAutoFilter={lastAnswer ? field => handleRemoveFilter(lastAnswer.id, field) : undefined}
+      busy={isLoading}
       action={<SendButton onClick={handleSend} disabled={!input.trim() || isLoading || !selectedAgentId} loading={isLoading} />}
     >
       <textarea

@@ -10,9 +10,11 @@ import {
   DropdownMenuLabel,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
-import { Check, ChevronDown, Library, SlidersHorizontal, X } from "lucide-react"
+import { Check, ChevronDown, Library, SlidersHorizontal, Sparkles, X } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { FilterMatches } from "@/components/filter-matches"
+import { AutoBadge, AutoSummary, autoByField, autoFieldClass, autoValue, countApplied } from "@/components/auto-filters"
+import { AutoFilters } from "@/types/chat"
 
 interface AgentPanelProps {
   agents: AgentInfo[]
@@ -24,12 +26,19 @@ interface AgentPanelProps {
   children: React.ReactNode
   /** The send button, rendered at the pill's end. */
   action: React.ReactNode
+  /** The filters the last answer found in its question (shown in the fields, marked). */
+  autoFilters?: AutoFilters | null
+  /** Ask the last question again without a found filter. */
+  onRemoveAutoFilter?: (field: string) => void
+  busy?: boolean
+}
+
+function isSet(v: AgentFilters[string] | undefined): boolean {
+  return typeof v === "string" ? v.trim() !== "" : Boolean(v?.from || v?.to)
 }
 
 function countActiveFilters(filters: AgentFilters): number {
-  return Object.values(filters).filter(v =>
-    typeof v === "string" ? v.trim() !== "" : Boolean(v?.from || v?.to),
-  ).length
+  return Object.values(filters).filter(isSet).length
 }
 
 const fieldClass =
@@ -59,7 +68,11 @@ const DATE_PRESETS: { label: string; range: () => DateValue }[] = [
 ]
 
 /** A "from – to" date pair with labels and one-click ranges. */
-function DateRange({ value, onChange }: { value: DateValue; onChange: (v: DateValue) => void }) {
+function DateRange({ value, onChange, inputClass }: {
+  value: DateValue
+  onChange: (v: DateValue) => void
+  inputClass?: string
+}) {
   const reversed = Boolean(value.from && value.to && value.from > value.to)
   return (
     <div className="space-y-1.5">
@@ -71,7 +84,7 @@ function DateRange({ value, onChange }: { value: DateValue; onChange: (v: DateVa
             value={value.from ?? ""}
             max={value.to || undefined}
             onChange={e => onChange({ ...value, from: e.target.value })}
-            className="text-sm"
+            className={cn("text-sm", inputClass)}
           />
         </label>
         <span className="pb-2 text-muted-foreground" aria-hidden>–</span>
@@ -82,7 +95,7 @@ function DateRange({ value, onChange }: { value: DateValue; onChange: (v: DateVa
             value={value.to ?? ""}
             min={value.from || undefined}
             onChange={e => onChange({ ...value, to: e.target.value })}
-            className="text-sm"
+            className={cn("text-sm", inputClass)}
           />
         </label>
       </div>
@@ -132,6 +145,9 @@ export function AgentPanel({
   onFiltersChange,
   children,
   action,
+  autoFilters,
+  onRemoveAutoFilter,
+  busy,
 }: AgentPanelProps) {
   const [showFilters, setShowFilters] = useState(false)
   const [cardMaxHeight, setCardMaxHeight] = useState<number | undefined>(undefined)
@@ -174,6 +190,10 @@ export function AgentPanel({
   const agent = agents.find(a => a.id === selectedAgentId) ?? null
   const activeCount = countActiveFilters(filters)
   const hasFilters = Boolean(agent && agent.filters.length > 0)
+  // found filters, except on fields the user has set (their own choice wins)
+  const auto = Object.fromEntries(Object.entries(autoByField(autoFilters))
+    .filter(([name]) => !isSet(filters[name])))
+  const autoCount = countApplied(auto)
 
   const selectAgent = (id: string) => {
     onSelectAgent(id)
@@ -219,33 +239,47 @@ export function AgentPanel({
               <X className="h-4 w-4" />
             </button>
           </div>
+          <AutoSummary filters={autoFilters} byField={auto} />
           <div className="grid shrink-0 grid-cols-1 gap-x-3 gap-y-2.5 sm:grid-cols-2 lg:grid-cols-4">
-            {agent.filters.map(field => (
-              <div key={field.name} className={cn("min-w-0", field.type === "date" && "sm:col-span-2")}>
-                <label className="mb-1 block text-xs text-muted-foreground">{field.label}</label>
-                {field.type === "choice" ? (
-                  <select
-                    value={(filters[field.name] as string) ?? ""}
-                    onChange={e => setField(field.name, e.target.value)}
-                    className={fieldClass}
-                  >
-                    <option value="">הכל</option>
-                    {(field.values ?? []).map(v => (
-                      <option key={v} value={v}>{v}</option>
-                    ))}
-                  </select>
-                ) : field.type === "date" ? (
-                  <DateRange value={dateVal(field.name)} onChange={v => setField(field.name, v)} />
-                ) : (
-                  <Input
-                    value={(filters[field.name] as string) ?? ""}
-                    onChange={e => setField(field.name, e.target.value)}
-                    placeholder={field.label}
-                    className="text-sm"
-                  />
-                )}
-              </div>
-            ))}
+            {agent.filters.map(field => {
+              const found = auto[field.name]
+              const shown = found ? autoValue(found) : undefined
+              const text = typeof shown === "string" ? shown : undefined
+              return (
+                <div key={field.name} className={cn("min-w-0", field.type === "date" && "sm:col-span-2")}>
+                  <div className="mb-1 flex min-w-0 items-center gap-1.5">
+                    <label className="truncate text-xs text-muted-foreground">{field.label}</label>
+                    <AutoBadge auto={found} onRemove={onRemoveAutoFilter} busy={busy} />
+                  </div>
+                  {field.type === "choice" ? (
+                    <select
+                      value={text ?? (filters[field.name] as string) ?? ""}
+                      onChange={e => setField(field.name, e.target.value)}
+                      className={cn(fieldClass, autoFieldClass(found))}
+                    >
+                      <option value="">הכל</option>
+                      {text && !(field.values ?? []).includes(text) && <option value={text}>{text}</option>}
+                      {(field.values ?? []).map(v => (
+                        <option key={v} value={v}>{v}</option>
+                      ))}
+                    </select>
+                  ) : field.type === "date" ? (
+                    <DateRange
+                      value={shown && typeof shown === "object" ? shown : dateVal(field.name)}
+                      onChange={v => setField(field.name, v)}
+                      inputClass={autoFieldClass(found)}
+                    />
+                  ) : (
+                    <Input
+                      value={text ?? (filters[field.name] as string) ?? ""}
+                      onChange={e => setField(field.name, e.target.value)}
+                      placeholder={field.label}
+                      className={cn("text-sm", autoFieldClass(found))}
+                    />
+                  )}
+                </div>
+              )
+            })}
           </div>
           <FilterMatches agentId={agent.id} filters={filters} />
         </div>
@@ -304,12 +338,23 @@ export function AgentPanel({
               showFilters && "bg-accent",
             )}
             aria-label="פילטרים"
-            title="פילטרים"
+            title={autoCount > 0 ? `פילטרים · ${autoCount} זוהו מהשאלה האחרונה` : "פילטרים"}
           >
             <SlidersHorizontal className="h-[18px] w-[18px]" />
             {activeCount > 0 && (
               <span className="absolute -start-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-foreground px-1 text-[10px] font-medium text-background">
                 {activeCount}
+              </span>
+            )}
+            {autoCount > 0 && (
+              <span
+                className={cn(
+                  "absolute -start-0.5 flex h-4 min-w-4 items-center justify-center gap-px rounded-full bg-blue-600 px-1 text-[10px] font-medium text-white dark:bg-blue-500",
+                  activeCount > 0 ? "-bottom-0.5" : "-top-0.5",
+                )}
+              >
+                <Sparkles className="h-2.5 w-2.5" aria-hidden />
+                {autoCount}
               </span>
             )}
           </button>
@@ -322,6 +367,7 @@ export function AgentPanel({
       {agent && (
         <p className="mt-1.5 truncate px-4 text-xs text-muted-foreground sm:hidden">
           מחפש ב{agent.name}{activeCount > 0 && ` · ${activeCount} פילטרים`}
+          {autoCount > 0 && ` · ${autoCount} זוהו מהשאלה`}
         </p>
       )}
     </div>
