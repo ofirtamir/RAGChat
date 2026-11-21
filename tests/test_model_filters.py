@@ -84,6 +84,16 @@ def test_guesses_and_typos_only_prefer(ctx):
     assert not hard and not soft                          # a guess on a short list is dropped
 
 
+def test_a_plain_committee_name_filters_even_when_the_model_hedges(ctx):
+    # "מה נקבע לגבי בנייה ברחובות העיר תל אביב?": the model marked תל אביב not explicit
+    hard, soft = parse(ctx, {"field": "Committee", "value": "תל אביב-יפו", "explicit": False},
+                       {"field": "DecisiveAppraiser", "value": base.COHENS[0], "explicit": False})
+    assert hard["Committee"].values == ["תל אביב-יפו"]
+    assert soft["DecisiveAppraiser"].values == [base.COHENS[0]]      # an appraiser guess still only prefers
+    hard, soft = parse(ctx, {"field": "Committee", "value": "רחובות", "explicit": False})
+    assert not hard and soft["Committee"].values == ["רחובות"]        # also an everyday word
+
+
 def test_several_values_of_one_field_are_any_of_them(ctx):
     hard, _ = parse(ctx, *({"field": "DecisiveAppraiser", "value": v, "explicit": True} for v in base.COHENS),
                     {"field": "Plot", "value": "81"}, {"field": "Plot", "value": "84, 90"})

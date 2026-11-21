@@ -95,7 +95,8 @@ Rules:
    ({today.year - 1}-01-01 to {today.year - 1}-12-31); "בשנתיים האחרונות" → from the same day two years ago.
    A date the question states is explicit.
 7. explicit is true when the question clearly asks for that value. explicit false is only for the
-   doubtful cases above (a family name without "שמאי", a place that may not be the committee).
+   doubtful cases above (a family name without "שמאי", a committee whose name is also an everyday
+   word). A city named in the question ("בעיר תל אביב") is explicit, even next to an everyday word.
    Never return a field the question does not mention.
 8. A follow-up that refers to an earlier turn ("באותה ועדה", "ומה לגבי 2021") carries the earlier values over.
 9. Nothing found → "filters": []."""
@@ -141,6 +142,13 @@ def _entity(ctx: Context, name: str, value: str) -> tuple[filter_values.Entity |
     return None, False
 
 
+def _plain_place(name: str, ent: filter_values.Entity) -> bool:
+    """A committee named exactly that is not also an everyday word filters even
+    when the model hedges: it marked "תל אביב" not explicit in "בנייה ברחובות
+    העיר תל אביב" (production, 2026-11-21). "רחובות", "אזור"… still need it."""
+    return name == "Committee" and ent.key not in filter_values.AMBIGUOUS_WORDS
+
+
 def _merge(target: dict[str, Condition], c: Condition) -> None:
     old = target.get(c.field)
     if old is None:
@@ -173,7 +181,7 @@ def parse(agent: dict, ctx: Context, items) -> tuple[list[Condition], list[Condi
             if not explicit and len(f.get("values") or []) <= SHORT_LIST:
                 continue   # a guess at a role/type/version (the model offers "שמאי מייעץ" for any "השמאי")
             c = Condition(name, "in", ent.values(), label=label, display=ent.label, matched=raw,
-                          certain=explicit and exact)
+                          certain=exact and (explicit or _plain_place(name, ent)))
         elif name in numeric:
             nums = list(dict.fromkeys(_DIGITS.findall(raw)))
             if not nums:
