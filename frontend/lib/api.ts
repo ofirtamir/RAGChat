@@ -138,11 +138,12 @@ export async function getMatchingDocuments(
   token: string | undefined,
   limit = 0,
   signal?: AbortSignal,
+  found?: FilterCondition[],
 ): Promise<MatchingDocuments> {
   const res = await authFetch(`${API_BASE}/agents/${encodeURIComponent(agentId)}/matching`, token, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ filters, limit }),
+    body: JSON.stringify({ filters, limit, found: found?.length ? found : null }),
     signal,
   })
   if (!res.ok) throw new Error(`HTTP ${res.status}`)

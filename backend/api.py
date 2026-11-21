@@ -39,7 +39,7 @@ from .admin_insights_api import router as admin_insights_router
 from .eval_api import router as eval_router
 from .feedback_api import router as feedback_router
 from .auth import access_state, get_active_user, get_active_user_id, get_current_user, require_admin
-from .chat_models import ChatRequest, ChatResponse
+from .chat_models import MATCHING_LIST_MAX, ChatRequest, ChatResponse, MatchingRequest
 
 app =FastAPI(title="RAGChat API", version="1.0.0")
 
@@ -403,14 +403,6 @@ async def delete_user_session(
     return {"status": "deleted"}
 
 
-class MatchingRequest(BaseModel):
-    filters: dict | None = None
-    limit: int = 0          # 0: the count only; otherwise the newest documents too
-
-
-MATCHING_LIST_MAX = 300
-
-
 @app.post("/api/agents/{agent_id}/matching")
 def matching_documents(agent_id: str, req: MatchingRequest, _user: dict = Depends(get_active_user)):
     """How many decisions the filter panel's choices leave, and (with `limit`) which."""
@@ -420,7 +412,7 @@ def matching_documents(agent_id: str, req: MatchingRequest, _user: dict = Depend
     _require_agent(agent_id)
     if req.filters is not None and len(req.filters) > 50:
         raise HTTPException(status_code=400, detail="Too many filters")
-    return match(get_agent(agent_id), req.filters, max(0, min(req.limit, MATCHING_LIST_MAX)))
+    return match(get_agent(agent_id), req.filters, max(0, min(req.limit, MATCHING_LIST_MAX)), req.found)
 
 
 @app.get("/api/sources/{agent_id}/{key}")

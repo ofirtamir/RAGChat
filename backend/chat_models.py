@@ -30,3 +30,13 @@ class ChatResponse(BaseModel):
     plan: dict | None
     question_id: str | None = None
     auto_filters: dict | None = None
+
+
+MATCHING_LIST_MAX = 300
+
+
+class MatchingRequest(BaseModel):
+    """The filter panel's count/list request (/api/agents/{id}/matching)."""
+    filters: dict | None = None
+    limit: int = 0          # 0: the count only; otherwise the newest documents too
+    found: list[dict] | None = Field(default=None, max_length=20)   # filters found in the last question

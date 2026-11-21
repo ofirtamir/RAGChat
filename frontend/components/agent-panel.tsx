@@ -283,7 +283,11 @@ export function AgentPanel({
               )
             })}
           </div>
-          <FilterMatches agentId={agent.id} filters={filters} />
+          <FilterMatches
+            agentId={agent.id}
+            filters={filters}
+            found={Object.values(auto).filter(a => a.kind === "applied").map(a => a.condition)}
+          />
         </div>
       )}
 

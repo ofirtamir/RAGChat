@@ -5,17 +5,22 @@ import { useSession } from "next-auth/react"
 import { ChevronDown, FileText, Loader2 } from "lucide-react"
 import { AgentFilters, getMatchingDocuments, MatchingDocuments } from "@/lib/api"
 import { SourceViewer } from "@/components/source-viewer"
-import { CitationDetail } from "@/types/chat"
+import { CitationDetail, FilterCondition } from "@/types/chat"
 import { cn } from "@/lib/utils"
 
 const LIST_LIMIT = 300
 const DEBOUNCE_MS = 350
 
 /**
- * Under the filter panel: how many decisions the chosen filters leave, a list
- * of them on request (newest first), and a click opens the document.
+ * Under the filter panel: how many decisions the chosen filters leave — with
+ * the filters found in the last question (`found`) — a list of them on
+ * request (newest first), and a click opens the document.
  */
-export function FilterMatches({ agentId, filters }: { agentId: string; filters: AgentFilters }) {
+export function FilterMatches({ agentId, filters, found }: {
+  agentId: string
+  filters: AgentFilters
+  found?: FilterCondition[]
+}) {
   const { data: session } = useSession()
   const token = session?.idToken
   const [data, setData] = useState<MatchingDocuments | null>(null)
@@ -23,18 +28,20 @@ export function FilterMatches({ agentId, filters }: { agentId: string; filters: 
   const [showList, setShowList] = useState(false)
   const [opened, setOpened] = useState<CitationDetail | null>(null)
   const filtersKey = JSON.stringify(filters)
+  const foundKey = JSON.stringify(found ?? [])
 
   useEffect(() => {
     const ctrl = new AbortController()
     setLoading(true)
     const timer = setTimeout(() => {
-      getMatchingDocuments(agentId, JSON.parse(filtersKey), token, showList ? LIST_LIMIT : 0, ctrl.signal)
+      getMatchingDocuments(agentId, JSON.parse(filtersKey), token, showList ? LIST_LIMIT : 0, ctrl.signal,
+                           JSON.parse(foundKey))
         .then(d => setData(d))
         .catch(() => { if (!ctrl.signal.aborted) setData(null) })
         .finally(() => { if (!ctrl.signal.aborted) setLoading(false) })
     }, DEBOUNCE_MS)
     return () => { clearTimeout(timer); ctrl.abort() }
-  }, [agentId, filtersKey, token, showList])
+  }, [agentId, filtersKey, foundKey, token, showList])
 
   if (!loading && (!data || data.total === 0)) return null
 
@@ -45,6 +52,7 @@ export function FilterMatches({ agentId, filters }: { agentId: string; filters: 
       : data.count === 0
         ? "אין החלטות שמתאימות לסינון"
         : `${data.count.toLocaleString()} החלטות מתאימות מתוך ${data.total.toLocaleString()}`
+  const withFound = Boolean(found?.length) && data && data.count > 0
 
   return (
     <div className="mt-3 flex min-h-0 flex-col border-t pt-3">
@@ -52,6 +60,7 @@ export function FilterMatches({ agentId, filters }: { agentId: string; filters: 
         <p className={cn("flex flex-1 items-center gap-1.5 text-sm", loading && data && "opacity-60")} aria-live="polite">
           {loading && <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-muted-foreground" />}
           <span className={cn(data?.count === 0 && "text-destructive")}>{summary}</span>
+          {withFound && <span className="text-xs text-blue-700 dark:text-blue-300">· כולל מה שזוהה מהשאלה</span>}
         </p>
         {data && data.count > 0 && (
           <button
