@@ -88,7 +88,7 @@ Rules:
 4. The appraisal type, appraiser role or version only when the question asks about that kind of decision
    ("תביעות פיצויים", "שמאי מייעץ", "שומה מתוקנת אחרי ערר"), not just because the topic is mentioned.
 5. Block (גוש) and plot (חלקה) only when the question gives their numbers with those words. A lot
-   in a plan ("מגרש 40A"), a plan number or a section is not a plot. Several numbers: one item each.
+   in a plan ("מגרש 40A"), a plan number ("תמ\"ל 3003") or a section is not a block or a plot. Several numbers: one item each.
 6. Dates are decision dates unless the question speaks of publication ("פורסם", "פרסום"). Today is
    {today.isoformat()}. "ב-2022" → from 2022-01-01 to 2022-12-31; "מ-2022" / "מאז 2020" → from only;
    "לפני 2019" → to 2018-12-31; "בשנה שעברה" → the whole previous calendar year
@@ -185,7 +185,9 @@ def parse(agent: dict, ctx: Context, items) -> tuple[list[Condition], list[Condi
                 continue
             if start and end and start > end:
                 start, end = end, start
-            c = Condition(name, "range", [], start, end, label, range_display(start, end), certain=explicit)
+            # always a filter: the model marks "בשנתיים האחרונות" not explicit although it
+            # computes the range right (check 2026-11-21); a date nobody named is never returned
+            c = Condition(name, "range", [], start, end, label, range_display(start, end))
         else:
             continue
         _merge(hard if c.certain else soft, c)

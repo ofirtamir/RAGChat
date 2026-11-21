@@ -97,6 +97,9 @@ def test_dates(ctx):
     assert (c.start, c.end, c.display) == (20220101, 20221231, "2022")
     hard, _ = parse(ctx, {"field": "PublicityDate", "to": "2021-06-30", "from": "2023-01-01"})   # swapped
     assert (hard["PublicityDate"].start, hard["PublicityDate"].end) == (20210630, 20230101)
+    hard, soft = parse(ctx, {"field": "DecisionDate", "from": "2024-11-21", "explicit": False},   # as the model
+                       {"field": "DecisionDate", "to": "2025-11-20", "explicit": False})       # answers "בשנתיים האחרונות"
+    assert (hard["DecisionDate"].start, hard["DecisionDate"].end) == (20241121, None) and not soft
     hard, _ = parse(ctx, {"field": "DecisionDate", "from": "2020"})
     assert (hard["DecisionDate"].start, hard["DecisionDate"].end, hard["DecisionDate"].display) == (20200101, None, "מ-2020")
 
